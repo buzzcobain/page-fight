@@ -72,7 +72,34 @@ class Character3DBase {
       if (this.state !== 'HUNTING') {
         this.state = 'HUNTING';
         this.huntTimer = 0;
+        this.huntScanTimer = 1.5;
+        this.huntPatrolTargetX = mouse3D.lastExitWorldX || (this.facing * 35);
         this.onStartHunting(mouse3D.lastExitPos);
+      } else {
+        this.huntTimer += dt;
+        this.huntScanTimer -= dt;
+
+        // Active perimeter sweep and hunting loop
+        if (this.huntScanTimer <= 0) {
+          const roll = Math.random();
+          if (roll < 0.45) {
+            // Rush toward left/right border where cursor escaped
+            const exitSign = (mouse3D.lastExitWorldX || 0) >= 0 ? 1 : -1;
+            this.huntPatrolTargetX = exitSign * (36 + Math.random() * 6);
+            this.huntScanTimer = 3.0 + Math.random() * 2.0;
+            if (Math.random() < 0.5) window.soundEngine.playSonarPing();
+            this.onScanBorder();
+          } else if (roll < 0.8) {
+            // Patrol across arena to other side
+            this.huntPatrolTargetX = (Math.random() * 2 - 1) * 36;
+            this.huntScanTimer = 3.5 + Math.random() * 2.0;
+            if (Math.random() < 0.4) this.onScanBorder();
+          } else {
+            // Stand and scan border
+            this.huntScanTimer = 2.0;
+            if (Math.random() < 0.4) this.onScanBorder();
+          }
+        }
       }
     } else {
       if (this.state === 'HUNTING') {
@@ -85,9 +112,18 @@ class Character3DBase {
       }
     }
 
-    const targetX = mouse3D.active ? mouse3D.worldX : (mouse3D.lastExitWorldX || this.group.position.x + this.facing * 10);
-    this.facing = targetX > this.group.position.x ? 1 : -1;
-    this.group.rotation.y = this.facing === 1 ? 0 : Math.PI;
+    if (this.state !== 'HUNTING') {
+      const targetX = mouse3D.active ? mouse3D.worldX : (mouse3D.lastExitWorldX || this.group.position.x + this.facing * 10);
+      this.facing = targetX > this.group.position.x ? 1 : -1;
+      this.group.rotation.y = this.facing === 1 ? 0 : Math.PI;
+    }
+  }
+
+  onScanBorder() {
+    if (this.huntQuips && this.huntQuips.length > 0 && Math.random() < 0.65) {
+      const q = this.huntQuips[Math.floor(Math.random() * this.huntQuips.length)];
+      this.say(q, 2.5);
+    }
   }
 
   dispose() {
@@ -124,6 +160,12 @@ class Wizard3D extends Character3DBase {
       "MY LEVITATION SPELL HATH FAILED!",
       "WE PLUNGE INTO THE ABYSS!",
       "I WILL SMITE THEE AS WE FALL!"
+    ];
+    this.huntQuips = [
+      "WHERE HAST THOU FLED, SPECTRAL ARROW?!",
+      "I SENSE THY ESSENCE LURKING BEYOND THE FRAME!",
+      "THOU ART COWARDLY TO ABANDON THE REALM!",
+      "REVEAL THYSELF BEFORE I TEAR THE VEIL ASUNDER!"
     ];
 
     this.buildMesh();
@@ -236,9 +278,9 @@ class Wizard3D extends Character3DBase {
   }
 
   onStartHunting(lastExitPos) {
-    this.say("WHERE HAST THOU FLED, PHANTOM?!");
+    this.say(this.huntQuips[0]);
     window.soundEngine.playSonarPing();
-    this.targetX = lastExitPos ? Math.max(-25, Math.min(25, (lastExitPos.x / window.innerWidth) * 50 - 25)) : this.group.position.x;
+    this.huntPatrolTargetX = lastExitPos ? Math.max(-42, Math.min(42, (lastExitPos.x / window.innerWidth) * 88 - 44)) : (this.facing * 36);
   }
 
   onSpotCursor() {
@@ -259,7 +301,7 @@ class Wizard3D extends Character3DBase {
 
     if (this.state === 'ATTACKING') {
       const desiredX = mouse3D.worldX < this.group.position.x ? mouse3D.worldX + 18 : mouse3D.worldX - 18;
-      this.targetX = Math.max(-26, Math.min(26, desiredX));
+      this.targetX = Math.max(-42, Math.min(42, desiredX));
       this.group.position.x += (this.targetX - this.group.position.x) * 2.2 * dt;
 
       this.attackCooldown -= dt;
@@ -267,7 +309,16 @@ class Wizard3D extends Character3DBase {
         this.castSpell(mouse3D, physics3D, sceneManager3D);
       }
     } else if (this.state === 'HUNTING') {
-      this.group.position.x += (this.targetX - this.group.position.x) * 1.5 * dt;
+      const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
+      const dist = targetX - this.group.position.x;
+      if (Math.abs(dist) > 1.2) {
+        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 16 * dt);
+        this.facing = dist >= 0 ? 1 : -1;
+      }
+      this.group.rotation.y = (this.facing === 1 ? 0 : Math.PI) + Math.sin(this.huntTimer * 3.5) * 0.45;
+      if (this.staff) {
+        this.staff.rotation.x = -0.3 + Math.sin(this.huntTimer * 2.8) * 0.35;
+      }
     }
   }
 
@@ -366,6 +417,12 @@ class Soldier3D extends Character3DBase {
       "THE FLOOR GAVE WAY! MAN DOWN!",
       "FREEFALL COMBAT ENGAGED! FIRE ON TARGET!",
       "HOLD ONTO YOUR HELMETS!"
+    ];
+    this.huntQuips = [
+      "TARGET OFF-GRID! PERIMETER SEARCH IN EFFECT!",
+      "WHERE IS THAT GLITCH HIDING?!",
+      "SWEEPING SECTORS! IT CANNOT ESCAPE THE SYSTEM!",
+      "EYES ON THE BORDERS! DON'T LET IT FLANK US!"
     ];
 
     this.buildMesh();
@@ -481,9 +538,9 @@ class Soldier3D extends Character3DBase {
   }
 
   onStartHunting(lastExitPos) {
-    this.say("TARGET OFF-GRID! PERIMETER SEARCH IN EFFECT!");
+    this.say(this.huntQuips[0]);
     window.soundEngine.playSonarPing();
-    this.targetX = lastExitPos ? Math.max(-25, Math.min(25, (lastExitPos.x / window.innerWidth) * 50 - 25)) : this.group.position.x;
+    this.huntPatrolTargetX = lastExitPos ? Math.max(-42, Math.min(42, (lastExitPos.x / window.innerWidth) * 88 - 44)) : (this.facing * 36);
   }
 
   onSpotCursor() {
@@ -504,7 +561,7 @@ class Soldier3D extends Character3DBase {
 
     if (this.state === 'ATTACKING') {
       const desiredX = mouse3D.worldX + (mouse3D.worldX > this.group.position.x ? -18 : 18);
-      this.targetX = Math.max(-25, Math.min(25, desiredX));
+      this.targetX = Math.max(-42, Math.min(42, desiredX));
       const dist = this.targetX - this.group.position.x;
       this.group.position.x += dist * 2.8 * dt;
 
@@ -517,7 +574,19 @@ class Soldier3D extends Character3DBase {
         this.fireArsenal(mouse3D, physics3D, sceneManager3D);
       }
     } else if (this.state === 'HUNTING') {
-      this.group.position.x += (this.targetX - this.group.position.x) * 1.8 * dt;
+      const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
+      const dist = targetX - this.group.position.x;
+      if (Math.abs(dist) > 1.5) {
+        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 18 * dt);
+        this.walkCycle += 18 * dt * 0.4;
+        this.legL.rotation.x = Math.sin(this.walkCycle) * 0.5;
+        this.legR.rotation.x = -Math.sin(this.walkCycle) * 0.5;
+        this.facing = dist >= 0 ? 1 : -1;
+      } else {
+        this.legL.rotation.x = 0;
+        this.legR.rotation.x = 0;
+      }
+      this.group.rotation.y = (this.facing === 1 ? 0 : Math.PI) + Math.sin(this.huntTimer * 3.5) * 0.5;
     }
   }
 
@@ -633,6 +702,12 @@ class Knight3D extends Character3DBase {
       "BRACE THY ARMOR! WE PLUNGE INTO CHAOS!",
       "MY BLADE WILL STRIKE THEE AS WE FALL!"
     ];
+    this.huntQuips = [
+      "COME FORTH, PHANTOM! THOU CANST NOT HIDE FOREVER!",
+      "THOU LURKEST BEYOND THE GATES OF VISION!",
+      "STAND AND FIGHT, CRAVEN WHELP!",
+      "I SHALT NOT REST UNTIL THOU ART CLEFT IN TWAIN!"
+    ];
 
     this.buildMesh();
   }
@@ -744,9 +819,9 @@ class Knight3D extends Character3DBase {
   }
 
   onStartHunting(lastExitPos) {
-    this.say("COME FORTH, PHANTOM! THOU CANST NOT HIDE FOREVER!");
+    this.say(this.huntQuips[0]);
     window.soundEngine.playArmorClang();
-    this.targetX = lastExitPos ? Math.max(-25, Math.min(25, (lastExitPos.x / window.innerWidth) * 50 - 25)) : this.group.position.x;
+    this.huntPatrolTargetX = lastExitPos ? Math.max(-42, Math.min(42, (lastExitPos.x / window.innerWidth) * 88 - 44)) : (this.facing * 36);
   }
 
   onSpotCursor() {
@@ -765,7 +840,7 @@ class Knight3D extends Character3DBase {
       const dist = mouse3D.worldX - this.group.position.x;
       if (Math.abs(dist) > 12) {
         const dir = dist > 0 ? 1 : -1;
-        this.group.position.x += dir * this.moveSpeed * dt;
+        this.group.position.x = Math.max(-44, Math.min(44, this.group.position.x + dir * this.moveSpeed * dt));
         this.walkCycle += this.moveSpeed * dt * 0.4;
         this.legL.rotation.x = Math.sin(this.walkCycle) * 0.5;
         this.legR.rotation.x = -Math.sin(this.walkCycle) * 0.5;
@@ -776,7 +851,19 @@ class Knight3D extends Character3DBase {
         this.meleeAssault(mouse3D, physics3D, sceneManager3D);
       }
     } else if (this.state === 'HUNTING') {
-      this.group.position.x += (this.targetX - this.group.position.x) * 1.6 * dt;
+      const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
+      const dist = targetX - this.group.position.x;
+      if (Math.abs(dist) > 1.5) {
+        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), this.moveSpeed * 0.9 * dt);
+        this.walkCycle += this.moveSpeed * dt * 0.4;
+        this.legL.rotation.x = Math.sin(this.walkCycle) * 0.5;
+        this.legR.rotation.x = -Math.sin(this.walkCycle) * 0.5;
+        this.facing = dist >= 0 ? 1 : -1;
+      } else {
+        this.legL.rotation.x = 0;
+        this.legR.rotation.x = 0;
+      }
+      this.group.rotation.y = (this.facing === 1 ? 0 : Math.PI) + Math.sin(this.huntTimer * 3.0) * 0.4;
     }
   }
 
@@ -870,6 +957,12 @@ class Robot3D extends Character3DBase {
       "TERRAIN INTEGRITY: 0%. GRAVITATIONAL PLUNGE INITIATED!",
       "RE-ROUTING PNEUMATICS! FREEFALL DETECTED!",
       "SUBSURFACE CHASM BREACHED!"
+    ];
+    this.huntQuips = [
+      "OPTICAL MATRIX LOST. DEPLOYING EXTENDED SENSORS.",
+      "SCANNING PERIMETER SECTORS FOR INTRUDER.",
+      "CURSOR EXITED VIEWPORT MATRIX. TRACKING RESIDUAL TRACE.",
+      "PURGE DIRECTIVE PERSISTS. STANDING BY FOR RE-ENTRY."
     ];
 
     this.buildMesh();
@@ -982,9 +1075,9 @@ class Robot3D extends Character3DBase {
   }
 
   onStartHunting(lastExitPos) {
-    this.say("OPTICAL MATRIX LOST. DEPLOYING EXTENDED SENSORS.");
+    this.say(this.huntQuips[0]);
     window.soundEngine.playSonarPing();
-    this.targetX = lastExitPos ? Math.max(-25, Math.min(25, (lastExitPos.x / window.innerWidth) * 50 - 25)) : this.group.position.x;
+    this.huntPatrolTargetX = lastExitPos ? Math.max(-42, Math.min(42, (lastExitPos.x / window.innerWidth) * 88 - 44)) : (this.facing * 36);
   }
 
   onSpotCursor() {
@@ -997,7 +1090,7 @@ class Robot3D extends Character3DBase {
 
     if (this.state === 'ATTACKING') {
       const desiredX = mouse3D.worldX < this.group.position.x ? mouse3D.worldX + 20 : mouse3D.worldX - 20;
-      this.targetX = Math.max(-25, Math.min(25, desiredX));
+      this.targetX = Math.max(-42, Math.min(42, desiredX));
       this.group.position.x += (this.targetX - this.group.position.x) * 2.0 * dt;
 
       this.attackCooldown -= dt;
@@ -1038,7 +1131,22 @@ class Robot3D extends Character3DBase {
         }
       }
     } else if (this.state === 'HUNTING') {
-      this.group.position.x += (this.targetX - this.group.position.x) * 1.5 * dt;
+      const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
+      const dist = targetX - this.group.position.x;
+      if (Math.abs(dist) > 2.0) {
+        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 15 * dt);
+        this.legL.position.y = Math.abs(Math.sin(this.huntTimer * 5.0)) * 0.6;
+        this.legR.position.y = Math.abs(Math.cos(this.huntTimer * 5.0)) * 0.6;
+        this.facing = dist >= 0 ? 1 : -1;
+      } else {
+        this.legL.position.y = 0;
+        this.legR.position.y = 0;
+      }
+      this.group.rotation.y = (this.facing === 1 ? 0 : Math.PI) + Math.sin(this.huntTimer * 2.8) * 0.45;
+      if (this.eyeSpot) {
+        this.eyeSpot.target.position.x = this.facing * 16 + Math.sin(this.huntTimer * 4.0) * 8;
+        this.eyeSpot.target.position.y = 6 + Math.cos(this.huntTimer * 3.0) * 5;
+      }
     }
   }
 

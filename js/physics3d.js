@@ -24,8 +24,8 @@ class PhysicsWorld3D {
   getShakeOffset() {
     if (this.screenShake <= 0.001) return { x: 0, y: 0, z: 0, rotZ: 0 };
     const power = this.screenShake * this.screenShake;
-    const maxOffset = 1.2 * power;
-    const maxRot = 0.03 * power;
+    const maxOffset = 1.8 * power;
+    const maxRot = 0.035 * power;
     return {
       x: (Math.random() * 2 - 1) * maxOffset,
       y: (Math.random() * 2 - 1) * maxOffset,
@@ -337,11 +337,11 @@ class PhysicsWorld3D {
             this.addTrauma(0.5);
             this.blastRadius3D(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z, 12, 90, sceneryProps);
             remove = true;
-          } else if (p.mesh.position.y <= floorY || Math.abs(p.mesh.position.x) > 34) {
+          } else if (p.mesh.position.y <= floorY || Math.abs(p.mesh.position.x) > 60) {
             window.soundEngine.playHeavyExplosion(1.0);
             this.spawnSparks3D(p.mesh.position.x, floorY, p.mesh.position.z, 30, 0xf97316);
             this.addTrauma(0.45);
-            this.blastRadius3D(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z, 12, 90, sceneryProps);
+            this.blastRadius3D(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z, 14, 90, sceneryProps);
             remove = true;
           }
           break;
@@ -480,6 +480,20 @@ class PhysicsWorld3D {
         }
         this.projectiles3D.splice(i, 1);
       }
+    }
+  }
+
+  clearAllDebris() {
+    for (const d of this.debris3D) {
+      d.dispose();
+    }
+    this.debris3D = [];
+  }
+
+  accelerateDebrisDissolve() {
+    for (const d of this.debris3D) {
+      d.life = Math.min(d.life, 0.45);
+      d.fadeDuration = Math.min(d.fadeDuration, 0.45);
     }
   }
 }

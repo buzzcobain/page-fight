@@ -7,11 +7,12 @@ class GameApp3D {
     // Three.js Core
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0b0c10);
-    this.scene.fog = new THREE.FogExp2(0x0b0c10, 0.012);
+    this.scene.fog = new THREE.FogExp2(0x0b0c10, 0.008);
 
-    this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-    this.camera.position.set(0, 12, 38);
-    this.camera.lookAt(0, 6, 0);
+    // Zoomed-out Epic Panoramic Camera
+    this.camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 1000);
+    this.camera.position.set(0, 22, 75);
+    this.camera.lookAt(0, 8, 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -19,7 +20,7 @@ class GameApp3D {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.toneMappingExposure = 1.15;
 
     // Canvas insertion
     const oldCanvas = document.getElementById('gameCanvas');
@@ -68,6 +69,13 @@ class GameApp3D {
     this.lastTime = performance.now();
 
     this.setupLighting();
+    this.sceneManager3D.setLights({
+      ambLight: this.ambLight,
+      sunLight: this.sunLight,
+      rimLight: this.rimLight,
+      biomeLight: this.biomeLight
+    });
+
     this.setupCursorShield3D();
     this.setupInput();
     this.bindUI();
@@ -82,45 +90,50 @@ class GameApp3D {
 
   setupLighting() {
     // Ambient fill
-    const ambLight = new THREE.AmbientLight(0x384252, 0.9);
-    this.scene.add(ambLight);
+    this.ambLight = new THREE.AmbientLight(0x384252, 0.85);
+    this.scene.add(this.ambLight);
 
-    // Directional sunlight with soft shadows
+    // Directional sunlight with expanded panoramic soft shadow frustum
     this.sunLight = new THREE.DirectionalLight(0xfff7ed, 1.6);
-    this.sunLight.position.set(18, 38, 24);
+    this.sunLight.position.set(24, 44, 28);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.width = 2048;
     this.sunLight.shadow.mapSize.height = 2048;
     this.sunLight.shadow.camera.near = 0.5;
-    this.sunLight.shadow.camera.far = 120;
-    this.sunLight.shadow.camera.left = -35;
-    this.sunLight.shadow.camera.right = 35;
-    this.sunLight.shadow.camera.top = 35;
-    this.sunLight.shadow.camera.bottom = -10;
+    this.sunLight.shadow.camera.far = 150;
+    this.sunLight.shadow.camera.left = -58;
+    this.sunLight.shadow.camera.right = 58;
+    this.sunLight.shadow.camera.top = 45;
+    this.sunLight.shadow.camera.bottom = -12;
     this.sunLight.shadow.bias = -0.0005;
     this.scene.add(this.sunLight);
 
-    // Moody blue rim light
-    const rimLight = new THREE.DirectionalLight(0x0ea5e9, 0.7);
-    rimLight.position.set(-20, 15, -15);
-    this.scene.add(rimLight);
+    // Dynamic accent rim light
+    this.rimLight = new THREE.DirectionalLight(0x0ea5e9, 0.8);
+    this.rimLight.position.set(-25, 20, -15);
+    this.scene.add(this.rimLight);
+
+    // Volumetric Biome Point Light
+    this.biomeLight = new THREE.PointLight(0xf97316, 2.0, 50);
+    this.biomeLight.position.set(0, 10, 4);
+    this.scene.add(this.biomeLight);
   }
 
   setupCursorShield3D() {
-    // Interactive 3D Hexagonal Energy Shield Reticle
-    const shieldGeom = new THREE.RingGeometry(1.6, 2.0, 6);
+    // Prominent 3D Hexagonal Energy Shield Reticle for Zoomed-Out Vista
+    const shieldGeom = new THREE.RingGeometry(2.2, 2.8, 6);
     const shieldMat = new THREE.MeshStandardMaterial({
       color: 0x38bdf8,
       emissive: 0x0284c7,
-      emissiveIntensity: 0.8,
+      emissiveIntensity: 0.9,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.7
+      opacity: 0.75
     });
     this.shieldMesh = new THREE.Mesh(shieldGeom, shieldMat);
     this.scene.add(this.shieldMesh);
 
-    this.shieldLight = new THREE.PointLight(0x38bdf8, 1.2, 10);
+    this.shieldLight = new THREE.PointLight(0x38bdf8, 1.6, 14);
     this.shieldMesh.add(this.shieldLight);
   }
 
@@ -204,10 +217,10 @@ class GameApp3D {
   initSquad() {
     for (const c of this.squad) c.dispose();
     this.squad = [
-      new Wizard3D(-16, 0, 0, this.scene),
-      new Soldier3D(-6, 0, 0, this.scene),
-      new Knight3D(6, 0, 0, this.scene),
-      new Robot3D(16, 0, 0, this.scene)
+      new Wizard3D(-32, 0, 0, this.scene),
+      new Soldier3D(-11, 0, 0, this.scene),
+      new Knight3D(11, 0, 0, this.scene),
+      new Robot3D(32, 0, 0, this.scene)
     ];
   }
 
@@ -345,11 +358,12 @@ class GameApp3D {
       }
     }
 
-    // 5. CAMERA TRAUMA & SHAKE
+    // 5. CAMERA TRAUMA & SHAKE (Epic Zoomed-Out Framing)
     const shake = this.physics3D.getShakeOffset();
-    const baseCamY = this.sceneManager3D.isCollapsing ? 6 : 12;
-    this.camera.position.set(shake.x, baseCamY + shake.y, 38 + shake.z);
+    const baseCamY = this.sceneManager3D.isCollapsing ? 14 : 22;
+    this.camera.position.set(shake.x, baseCamY + shake.y, 75 + shake.z);
     this.camera.rotation.z = shake.rotZ;
+    this.camera.lookAt(shake.x * 0.2, 8 + shake.y * 0.2, 0);
 
     // 6. RENDER 3D SCENE
     this.renderer.render(this.scene, this.camera);
