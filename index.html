@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cursor Rage // Anomaly Purge Protocol</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Docked Workbench Toolbar -->
+  <header class="workbench-toolbar">
+    <div class="toolbar-group">
+      <div class="brand-badge">
+        <div class="indicator-dot"></div>
+        CURSOR RAGE // ANOMALY PURGE
+      </div>
+
+      <div id="activeTargetStatus" class="status-tag locked">
+        TARGET LOCKED
+      </div>
+
+      <!-- Character Selector Tabs -->
+      <nav class="char-tabs-container" aria-label="Character Roster">
+        <button class="char-tab active" data-char="wizard">Wizard [1]</button>
+        <button class="char-tab" data-char="soldier">Soldier [2]</button>
+        <button class="char-tab" data-char="knight">Knight [3]</button>
+        <button class="char-tab" data-char="robot">Robot [4]</button>
+      </nav>
+
+      <button id="btnToggleSquad" class="btn-utility" title="Deploy all characters at once">Squad Mode</button>
+    </div>
+
+    <div class="toolbar-group">
+      <!-- Destruction Meter -->
+      <div class="metric-container">
+        <span>DESTRUCTION</span>
+        <div class="destruction-bar-track">
+          <div id="destructionFill" class="destruction-bar-fill"></div>
+        </div>
+        <span id="destructionText">0%</span>
+      </div>
+
+      <!-- Telemetry Counters -->
+      <div class="telemetry-item">
+        DEFLECTIONS: <span id="deflectionsCount">0</span>
+      </div>
+
+      <div id="depthDisplay" class="status-tag depth">
+        SURFACE [0M]
+      </div>
+
+      <!-- Scene Dropdown -->
+      <select id="sceneSelect" class="scene-dropdown" aria-label="Select Scenery Preset">
+        <option value="castle">Castle Courtyard</option>
+        <option value="crypt">Dungeon Crypt</option>
+        <option value="bunker">Cyberpunk Bunker</option>
+        <option value="foundry">Magma Core Foundry</option>
+        <option value="salon">Grand Manor Salon</option>
+        <option value="ruins">Ancient Temple Ruins</option>
+      </select>
+
+      <button id="btnRegenScene" class="btn-utility" title="Regenerate destructible environment">Regen Scene [R]</button>
+      <button id="btnToggleMute" class="btn-utility" title="Toggle audio synthesis">Audio: Active [M]</button>
+    </div>
+  </header>
+
+  <!-- Fullscreen Interactive Canvas -->
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- Dialogue Callout Overlay -->
+  <div id="dialogueOverlay" class="dialogue-overlay"></div>
+
+  <!-- Bottom Telemetry Bar -->
+  <footer class="bottom-telemetry-bar">
+    <div class="hint-tags">
+      <span>MOVE CURSOR:</span> Provoke Attack
+      <span>•</span>
+      <span>EXIT WINDOW:</span> Trigger Border Hunting Search
+      <span>•</span>
+      <span>KEYS 1-4:</span> Swap Character
+      <span>•</span>
+      <span>KEY R:</span> Rebuild Scenery
+    </div>
+    <div>INVINCIBLE CURSOR PROTOCOL: ONLINE // THREE.JS 3D ENGINE</div>
+  </footer>
+
+  <!-- Scripts -->
+  <script src="js/three.min.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/scenes3d.js"></script>
+  <script src="js/characters3d.js"></script>
+  <script src="js/physics3d.js"></script>
+  <script src="js/game3d.js"></script>
+</body>
+</html>

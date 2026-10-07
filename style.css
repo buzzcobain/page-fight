@@ -1,0 +1,272 @@
+/* Reset & Typography */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #0b0c0e;
+  color: #f1f5f9;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+}
+
+/* Fullscreen Canvas */
+#gameCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  z-index: 1;
+}
+
+/* Docked Workbench Toolbar */
+.workbench-toolbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 52px;
+  background: #121316;
+  border-bottom: 1px solid #222328;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  z-index: 10;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+  text-transform: uppercase;
+  padding-right: 12px;
+  border-right: 1px solid #222328;
+}
+
+.brand-badge .indicator-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e5484d;
+  box-shadow: 0 0 8px rgba(229, 72, 77, 0.6);
+}
+
+/* Character Selector Tabs */
+.char-tabs-container {
+  display: flex;
+  background: #0b0c0e;
+  border: 1px solid #222328;
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.char-tab {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.char-tab:hover {
+  color: #f1f5f9;
+  background: #1a1b20;
+}
+
+.char-tab.active {
+  background: #222328;
+  color: #ffffff;
+  border-bottom: 2px solid #e5484d;
+}
+
+/* Scene Selector & Buttons */
+.scene-dropdown {
+  background: #0b0c0e;
+  color: #f1f5f9;
+  border: 1px solid #222328;
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  outline: none;
+  cursor: pointer;
+}
+
+.scene-dropdown:hover {
+  border-color: #383a42;
+}
+
+.btn-utility {
+  background: #1a1b20;
+  color: #cbd5e1;
+  border: 1px solid #222328;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  transition: all 0.15s ease;
+}
+
+.btn-utility:hover {
+  background: #24262d;
+  color: #ffffff;
+  border-color: #383a42;
+}
+
+.btn-utility.active {
+  background: #e5484d;
+  color: #ffffff;
+  border-color: #e5484d;
+}
+
+.btn-utility.muted {
+  color: #ef4444;
+}
+
+/* Destruction Meter */
+.metric-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.destruction-bar-track {
+  width: 110px;
+  height: 8px;
+  background: #0b0c0e;
+  border: 1px solid #222328;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.destruction-bar-fill {
+  width: 0%;
+  height: 100%;
+  background: #e5484d;
+  transition: width 0.2s ease-out;
+}
+
+/* Telemetry Stats */
+.telemetry-item {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.telemetry-item span {
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+/* Status Pill */
+.status-tag {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.status-tag.locked {
+  background: rgba(229, 72, 77, 0.15);
+  color: #e5484d;
+  border: 1px solid rgba(229, 72, 77, 0.3);
+}
+
+.status-tag.hunting {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.status-tag.depth {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+/* Bottom Instruction Sub-bar */
+.bottom-telemetry-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  background: #121316;
+  border-top: 1px solid #222328;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 10px;
+  color: #64748b;
+  z-index: 10;
+}
+
+.hint-tags {
+  display: flex;
+  gap: 16px;
+}
+
+.hint-tags span {
+  color: #94a3b8;
+}
+
+/* Floating Dialogue Overlay */
+.dialogue-overlay {
+  position: fixed;
+  bottom: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid #38bdf8;
+  color: #f8fafc;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 18px;
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+  z-index: 100;
+  letter-spacing: 0.04em;
+}
