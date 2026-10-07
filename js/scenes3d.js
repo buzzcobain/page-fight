@@ -1,6 +1,5 @@
-// 3D Destructible Scenery & Floor Engine using Three.js
-// Handles PBR volumetric environments, Voronoi-like 3D fracture debris with auto-fade disposal,
-// and subterranean shaft collapse transitions.
+// Realistic 3D Architectural Scenery & Floor Engine using Three.js and Procedural PBR Textures
+// Replaces flat primitive boxes with multi-tiered stone masonry, corbels, fluted columns, and detailed trims.
 
 class DebrisChunk3D {
   constructor(mesh, vx, vy, vz, vAng, scene) {
@@ -11,8 +10,8 @@ class DebrisChunk3D {
     this.vAng = vAng;
     this.scene = scene;
 
-    this.life = 5.0; // Total lifetime in seconds
-    this.fadeDuration = 1.8; // Time spent dissolving
+    this.life = 4.8; // Dissolves after settling
+    this.fadeDuration = 1.6;
     this.isSettled = false;
     this.heldByRobot = false;
     this.thrownByRobot = false;
@@ -24,26 +23,23 @@ class DebrisChunk3D {
 
     this.life -= dt;
 
-    // Dissolve & Fade Out before disappearing
+    // Dissolve & fade out to prevent screen clutter
     if (this.life <= this.fadeDuration) {
       const alpha = Math.max(0, this.life / this.fadeDuration);
       if (this.mesh.material) {
         this.mesh.material.transparent = true;
         this.mesh.material.opacity = alpha;
       }
-      // Shrink slightly as it turns to dust
       const s = Math.max(0.01, alpha);
       this.mesh.scale.set(s, s, s);
 
       if (this.life <= 0) {
-        // Dispose resources cleanly
         this.dispose();
-        return false; // Remove from array
+        return false;
       }
     }
 
     if (!this.isSettled) {
-      // 3D Gravity & Physics
       this.vy -= 26 * dt;
       this.mesh.position.x += this.vx * dt;
       this.mesh.position.y += this.vy * dt;
@@ -56,7 +52,6 @@ class DebrisChunk3D {
       this.vx *= 0.985;
       this.vz *= 0.985;
 
-      // Floor collision
       if (this.mesh.position.y <= floorY + this.radius) {
         this.mesh.position.y = floorY + this.radius;
         this.vy = -this.vy * 0.35;
@@ -109,30 +104,37 @@ class FloorSlab3D {
     this.fallVy = 0;
     this.fallVAng = (Math.random() - 0.5) * 3;
 
-    // Build 3D Mesh
+    // Use Procedural Stone / Metal / Wood Texture
     const geom = new THREE.BoxGeometry(w, h, d);
     let mat;
 
     if (theme === 'cyber' || theme === 'foundry') {
+      const metalTex = TextureGen.createMetalTexture();
       mat = new THREE.MeshStandardMaterial({
-        color: 0x1e293b,
+        map: metalTex,
+        bumpMap: metalTex,
+        bumpScale: 0.08,
+        color: 0x334155,
         metalness: 0.85,
-        roughness: 0.3,
-        emissive: 0x0f172a,
-        emissiveIntensity: 0.2
+        roughness: 0.25
       });
     } else if (theme === 'salon') {
+      const woodTex = TextureGen.createWoodTexture();
       mat = new THREE.MeshStandardMaterial({
-        color: 0x78350f,
-        roughness: 0.45,
-        metalness: 0.1
+        map: woodTex,
+        bumpMap: woodTex,
+        bumpScale: 0.05,
+        roughness: 0.45
       });
     } else {
-      // Stone Flagstone Pavers
+      const stoneTex = TextureGen.createStoneBrickTexture();
+      stoneTex.repeat.set(1.5, 1);
       mat = new THREE.MeshStandardMaterial({
-        color: 0x475569,
+        map: stoneTex,
+        bumpMap: stoneTex,
+        bumpScale: 0.12,
         roughness: 0.75,
-        metalness: 0.2
+        metalness: 0.15
       });
     }
 
@@ -147,7 +149,6 @@ class FloorSlab3D {
     if (this.collapsed) return;
     this.hp -= amount;
 
-    // Flash white on hit
     if (this.mesh.material) {
       this.mesh.material.emissive.setHex(0xffaa44);
       setTimeout(() => {
@@ -171,7 +172,6 @@ class FloorSlab3D {
 
     this.fallVy = 5 + Math.random() * 8;
 
-    // Spawn 3D debris fragments that will dissolve
     physics3D.createDebrisFromBox3D(
       this.mesh.position.x,
       this.mesh.position.y,
@@ -210,7 +210,7 @@ class SceneryProp3D {
     this.name = options.name;
     this.type = options.type;
     this.scene = scene;
-    this.maxHp = options.hp || 130;
+    this.maxHp = options.hp || 140;
     this.hp = this.maxHp;
     this.isDestroyed = false;
     this.heldByRobot = false;
@@ -219,124 +219,194 @@ class SceneryProp3D {
     this.group.position.set(options.x, options.y, options.z || 0);
 
     this.color = options.color || 0x64748b;
-    this.accentColor = options.accentColor || 0x334155;
     this.w = options.w || 4;
-    this.h = options.h || 12;
+    this.h = options.h || 14;
     this.d = options.d || 4;
     this.radius = Math.hypot(this.w, this.h) * 0.5;
 
-    this.buildGeometry();
+    this.buildArchitecturalModel();
     this.scene.add(this.group);
   }
 
-  buildGeometry() {
+  buildArchitecturalModel() {
     const w = this.w;
     const h = this.h;
     const d = this.d;
 
+    const stoneTex = TextureGen.createStoneBrickTexture();
+    const woodTex = TextureGen.createWoodTexture();
+    const metalTex = TextureGen.createMetalTexture();
+
     switch (this.type) {
       case 'tower':
-        // Fortress Keep Tower with Battlements
-        const towerMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8, metalness: 0.2 });
-        const towerMesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), towerMat);
-        towerMesh.position.y = h / 2;
-        towerMesh.castShadow = true;
-        towerMesh.receiveShadow = true;
-        this.group.add(towerMesh);
+        // Fortress Keep Watchtower with corbelled parapet, archer slits, and plinth
+        const stoneMat = new THREE.MeshStandardMaterial({
+          map: stoneTex,
+          bumpMap: stoneTex,
+          bumpScale: 0.15,
+          roughness: 0.8,
+          metalness: 0.15
+        });
 
-        // Crenel battlements on top
-        const crenelMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.7, metalness: 0.2 });
+        // Flared Base Plinth
+        const baseGeom = new THREE.BoxGeometry(w * 1.25, 2.5, d * 1.25);
+        const baseMesh = new THREE.Mesh(baseGeom, stoneMat);
+        baseMesh.position.y = 1.25;
+        baseMesh.castShadow = true;
+        baseMesh.receiveShadow = true;
+        this.group.add(baseMesh);
+
+        // Tower Shaft with Stone Courses
+        const shaftGeom = new THREE.BoxGeometry(w, h - 5.0, d);
+        const shaftMesh = new THREE.Mesh(shaftGeom, stoneMat);
+        shaftMesh.position.y = (h - 5.0) / 2 + 2.5;
+        shaftMesh.castShadow = true;
+        shaftMesh.receiveShadow = true;
+        this.group.add(shaftMesh);
+
+        // Overhanging Corbelled Parapet Top
+        const corbelGeom = new THREE.BoxGeometry(w * 1.3, 1.8, d * 1.3);
+        const corbelMesh = new THREE.Mesh(corbelGeom, stoneMat);
+        corbelMesh.position.y = h - 1.8;
+        corbelMesh.castShadow = true;
+        this.group.add(corbelMesh);
+
+        // Crenel battlements
         const cCount = 3;
         for (let i = 0; i < cCount; i++) {
-          const cMesh = new THREE.Mesh(new THREE.BoxGeometry(w / 4, 1.2, d), crenelMat);
-          cMesh.position.set(-w / 2 + (i * 2 + 1) * (w / 6), h + 0.6, 0);
+          const cMesh = new THREE.Mesh(new THREE.BoxGeometry(w / 3.5, 1.4, d * 1.3), stoneMat);
+          cMesh.position.set(-w / 2 + (i * 2 + 1) * (w / 6), h - 0.2, 0);
           cMesh.castShadow = true;
           this.group.add(cMesh);
         }
+
+        // Archer Slit with glowing internal torchlight
+        const slitMat = new THREE.MeshStandardMaterial({ color: 0x05070a });
+        const slit = new THREE.Mesh(new THREE.BoxGeometry(0.8, 4.0, 0.2), slitMat);
+        slit.position.set(0, h * 0.55, d / 2 + 0.1);
+        this.group.add(slit);
+
+        const torchLight = new THREE.PointLight(0xf97316, 1.5, 12);
+        torchLight.position.set(0, h * 0.55, d / 2 + 0.5);
+        this.group.add(torchLight);
         break;
 
       case 'pillar':
-        // Classical Fluted Doric Pillar with Capital & Base
-        const pillarMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.4, metalness: 0.1 });
-        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(w * 0.35, w * 0.4, h - 1.5, 16), pillarMat);
-        shaft.position.y = (h - 1.5) / 2 + 0.75;
-        shaft.castShadow = true;
-        shaft.receiveShadow = true;
-        this.group.add(shaft);
+        // Classical Fluted Doric Column with Astragal, Capital & Plinth
+        const colStoneMat = new THREE.MeshStandardMaterial({
+          map: stoneTex,
+          bumpMap: stoneTex,
+          bumpScale: 0.1,
+          roughness: 0.7,
+          metalness: 0.1
+        });
 
-        const capMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.5, metalness: 0.2 });
-        const cap = new THREE.Mesh(new THREE.BoxGeometry(w, 0.8, w), capMat);
-        cap.position.y = h - 0.4;
-        cap.castShadow = true;
-        this.group.add(cap);
+        // Plinth Block
+        const plinth = new THREE.Mesh(new THREE.BoxGeometry(w * 1.2, 1.2, w * 1.2), colStoneMat);
+        plinth.position.y = 0.6;
+        plinth.castShadow = true;
+        this.group.add(plinth);
 
-        const base = new THREE.Mesh(new THREE.BoxGeometry(w * 1.1, 0.8, w * 1.1), capMat);
-        base.position.y = 0.4;
-        base.castShadow = true;
-        this.group.add(base);
+        // Fluted Column Shaft
+        const colShaft = new THREE.Mesh(new THREE.CylinderGeometry(w * 0.42, w * 0.48, h - 2.8, 20), colStoneMat);
+        colShaft.position.y = (h - 2.8) / 2 + 1.2;
+        colShaft.castShadow = true;
+        colShaft.receiveShadow = true;
+        this.group.add(colShaft);
+
+        // Echinus & Abacus Capital
+        const echinus = new THREE.Mesh(new THREE.CylinderGeometry(w * 0.65, w * 0.45, 0.8, 16), colStoneMat);
+        echinus.position.y = h - 1.2;
+        this.group.add(echinus);
+
+        const abacus = new THREE.Mesh(new THREE.BoxGeometry(w * 1.3, 0.8, w * 1.3), colStoneMat);
+        abacus.position.y = h - 0.4;
+        abacus.castShadow = true;
+        this.group.add(abacus);
         break;
 
       case 'server':
-        // Cyberpunk Server Rack with Blinking LED Array
-        const serverMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.85, roughness: 0.25 });
-        const sMesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), serverMat);
-        sMesh.position.y = h / 2;
-        sMesh.castShadow = true;
-        sMesh.receiveShadow = true;
-        this.group.add(sMesh);
-
-        // Blue / Cyan status LED strips
-        const ledMat = new THREE.MeshStandardMaterial({
-          color: 0x38bdf8,
-          emissive: 0x0284c7,
-          emissiveIntensity: 0.8
+        // Cyberpunk Modular Blade Server Rack
+        const srvMetalMat = new THREE.MeshStandardMaterial({
+          map: metalTex,
+          bumpMap: metalTex,
+          bumpScale: 0.05,
+          color: 0x1e293b,
+          metalness: 0.85,
+          roughness: 0.25
         });
-        for (let l = 1; l < 5; l++) {
-          const led = new THREE.Mesh(new THREE.BoxGeometry(w * 0.75, 0.25, 0.1), ledMat);
-          led.position.set(0, l * (h / 6), d / 2 + 0.05);
-          this.group.add(led);
+
+        const rackBody = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), srvMetalMat);
+        rackBody.position.y = h / 2;
+        rackBody.castShadow = true;
+        rackBody.receiveShadow = true;
+        this.group.add(rackBody);
+
+        // Recessed Blade Server Chassis Rows with Glowing LED Arrays
+        const bladeMat = new THREE.MeshStandardMaterial({ color: 0x090d16, roughness: 0.3 });
+        const ledCyan = new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 1.0 });
+        const ledGreen = new THREE.MeshStandardMaterial({ color: 0x22c55e, emissive: 0x15803d, emissiveIntensity: 1.0 });
+
+        const rows = Math.floor(h / 2.5);
+        for (let r = 1; r < rows; r++) {
+          const bMesh = new THREE.Mesh(new THREE.BoxGeometry(w * 0.88, 1.8, 0.4), bladeMat);
+          bMesh.position.set(0, r * 2.4, d / 2 + 0.1);
+          this.group.add(bMesh);
+
+          for (let l = 0; l < 4; l++) {
+            const led = new THREE.Mesh(new THREE.SphereGeometry(0.12, 6, 6), l % 2 === 0 ? ledCyan : ledGreen);
+            led.position.set(-w * 0.3 + l * 0.45, r * 2.4, d / 2 + 0.35);
+            this.group.add(led);
+          }
         }
         break;
 
       case 'terminal':
-        // Holographic Console Station
-        const deskMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.7, roughness: 0.3 });
-        const desk = new THREE.Mesh(new THREE.BoxGeometry(w, 2.5, d), deskMat);
+        // Holographic Command Console
+        const consoleMat = new THREE.MeshStandardMaterial({ map: metalTex, roughness: 0.3, metalness: 0.8 });
+        const desk = new THREE.Mesh(new THREE.BoxGeometry(w, 2.5, d), consoleMat);
         desk.position.y = 1.25;
         desk.castShadow = true;
         this.group.add(desk);
 
-        // Translucent Blue Hologram Screen
+        // Volumetric Hologram Projection Emitter
         const holoMat = new THREE.MeshStandardMaterial({
           color: 0x38bdf8,
           emissive: 0x38bdf8,
-          emissiveIntensity: 0.6,
+          emissiveIntensity: 0.8,
           transparent: true,
-          opacity: 0.45
+          opacity: 0.5
         });
-        const holo = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.8, 3.5), holoMat);
+        const holo = new THREE.Mesh(new THREE.CylinderGeometry(w * 0.45, w * 0.3, 3.5, 16, 1, true), holoMat);
         holo.position.set(0, 3.5, 0);
-        holo.rotation.x = -0.2;
         this.group.add(holo);
+
+        const holoLight = new THREE.PointLight(0x38bdf8, 2.0, 14);
+        holoLight.position.set(0, 3.5, 0);
+        this.group.add(holoLight);
         break;
 
       case 'chandelier':
-        // Hanging Crystal Chandelier
-        const brassMat = new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.85, roughness: 0.2 });
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(w * 0.4, 0.2, 8, 16), brassMat);
+        // Crystal Chandelier with Gold Filigree
+        const brassMat = new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.9, roughness: 0.2 });
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(w * 0.45, 0.25, 8, 20), brassMat);
         ring.position.y = h / 2;
         ring.rotation.x = Math.PI / 2;
         this.group.add(ring);
 
-        // Candle light point
-        const candleLight = new THREE.PointLight(0xf59e0b, 1.2, 18);
+        const candleLight = new THREE.PointLight(0xf59e0b, 2.0, 20);
         candleLight.position.set(0, h / 2 + 0.5, 0);
         this.group.add(candleLight);
         break;
 
       default:
-        const boxMat = new THREE.MeshStandardMaterial({ color: this.color, roughness: 0.6, metalness: 0.3 });
-        const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), boxMat);
+        const defMat = new THREE.MeshStandardMaterial({
+          map: stoneTex,
+          bumpMap: stoneTex,
+          bumpScale: 0.1,
+          roughness: 0.7
+        });
+        const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), defMat);
         box.position.y = h / 2;
         box.castShadow = true;
         box.receiveShadow = true;
@@ -365,7 +435,6 @@ class SceneryProp3D {
     if (this.isDestroyed || this.heldByRobot) return;
     this.hp -= amount;
 
-    // Visual impact flash
     this.group.traverse(child => {
       if (child.isMesh && child.material) {
         child.material.emissive.setHex(0xffffff);
@@ -387,7 +456,6 @@ class SceneryProp3D {
     window.soundEngine.playStoneCrush(1.3);
     physics3D.addTrauma(0.35);
 
-    // Break into physics debris that will auto-decay & disappear
     physics3D.createDebrisFromBox3D(
       this.group.position.x,
       this.group.position.y + this.h / 2,
@@ -438,16 +506,18 @@ class SceneManager3D {
     this.totalInitialHp = 1;
     this.collapseTriggered = false;
 
-    // Build subterranean vertical shaft walls (initially invisible)
     this.buildSubterraneanShaft();
   }
 
   buildSubterraneanShaft() {
     this.shaftGroup = new THREE.Group();
+    const stoneTex = TextureGen.createStoneBrickTexture();
     const ringMat = new THREE.MeshStandardMaterial({
+      map: stoneTex,
+      bumpMap: stoneTex,
+      bumpScale: 0.15,
       color: 0x1e293b,
-      roughness: 0.8,
-      metalness: 0.2
+      roughness: 0.8
     });
 
     for (let r = 0; r < 24; r++) {
@@ -497,7 +567,6 @@ class SceneManager3D {
     else if (sceneId === 'salon') theme = 'salon';
     else if (sceneId === 'crypt') theme = 'crypt';
 
-    // 1. Build 3D Destructible Floor Slabs across X: -32 to +32
     const slabCount = 12;
     const slabW = 64 / slabCount;
     for (let i = 0; i < slabCount; i++) {
@@ -505,7 +574,6 @@ class SceneManager3D {
       this.floorSlabs.push(new FloorSlab3D(i, slabX, this.floorY, 0, slabW * 0.96, 2.5, 18, theme, this.scene));
     }
 
-    // 2. Build 3D Architectural Props
     switch (sceneId) {
       case 'castle':
         this.currentSceneName = 'Castle Courtyard';
@@ -626,7 +694,6 @@ class SceneManager3D {
       this.freefallProgress = Math.min(1.0, this.freefallTimer / 2.6);
       this.freefallSpeed = 40 + this.freefallProgress * 80;
 
-      // Scroll shaft rings upward to simulate rapid vertical descent
       for (const ring of this.shaftRings) {
         ring.position.y += this.freefallSpeed * dt;
         if (ring.position.y > 40) {
