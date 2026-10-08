@@ -21,6 +21,7 @@ class GameApp3D {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
+    this.renderer.outputEncoding = THREE.sRGBEncoding;
 
     // Canvas insertion
     const oldCanvas = document.getElementById('gameCanvas');

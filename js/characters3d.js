@@ -1,6 +1,189 @@
-// Sculpted 3D Character Engine using Procedural Textures & Organic Mesh Assemblies
-// Replaces primitive blocky geometries with contoured anatomical armor, flowing robes, and industrial hydraulics.
+// Production 3D Character Engine using Skinned GLB Meshes & Skeletal Animation Mixers
+// Powered by Three.js GLTFLoader and SkeletonUtils for natural anatomical movement and PBR texturing.
 
+class CharacterAnimationController {
+  constructor(model, mixer, animations) {
+    this.model = model;
+    this.mixer = mixer;
+    this.actions = {};
+    this.currentActionName = null;
+    this.currentAction = null;
+    this.onFinishListener = null;
+
+    if (animations && mixer) {
+      animations.forEach((clip) => {
+        const action = mixer.clipAction(clip);
+        this.actions[clip.name] = action;
+        // Case-insensitive / alternate name fallback indexing
+        this.actions[clip.name.toLowerCase()] = action;
+      });
+    }
+  }
+
+  getAction(name) {
+    if (!name) return null;
+    return this.actions[name] || this.actions[name.toLowerCase()] || null;
+  }
+
+  play(name, fadeDuration = 0.22, loop = THREE.LoopRepeat) {
+    const nextAction = this.getAction(name);
+    if (!nextAction) return;
+    if (this.currentActionName === name && nextAction.isRunning()) return;
+
+    nextAction.reset();
+    nextAction.setLoop(loop);
+    nextAction.clampWhenFinished = (loop === THREE.LoopOnce);
+
+    if (this.currentAction && this.currentAction !== nextAction) {
+      this.currentAction.crossFadeTo(nextAction, fadeDuration, true);
+    }
+    nextAction.play();
+
+    this.currentAction = nextAction;
+    this.currentActionName = name;
+  }
+
+  playOnce(name, fallbackName = 'Idle', fadeDuration = 0.18) {
+    const action = this.getAction(name);
+    if (!action) {
+      this.play(fallbackName, fadeDuration);
+      return;
+    }
+
+    if (this.onFinishListener && this.mixer) {
+      this.mixer.removeEventListener('finished', this.onFinishListener);
+      this.onFinishListener = null;
+    }
+
+    action.reset();
+    action.setLoop(THREE.LoopOnce);
+    action.clampWhenFinished = false;
+
+    if (this.currentAction && this.currentAction !== action) {
+      this.currentAction.crossFadeTo(action, fadeDuration, true);
+    }
+    action.play();
+    this.currentAction = action;
+    this.currentActionName = name;
+
+    this.onFinishListener = (e) => {
+      if (e.action === action) {
+        if (this.mixer) this.mixer.removeEventListener('finished', this.onFinishListener);
+        this.onFinishListener = null;
+        this.play(fallbackName, fadeDuration);
+      }
+    };
+    this.mixer.addEventListener('finished', this.onFinishListener);
+  }
+
+  update(dt) {
+    if (this.mixer) {
+      this.mixer.update(dt);
+    }
+  }
+
+  dispose() {
+    if (this.onFinishListener && this.mixer) {
+      this.mixer.removeEventListener('finished', this.onFinishListener);
+      this.onFinishListener = null;
+    }
+    if (this.mixer) {
+      this.mixer.stopAllAction();
+      this.mixer.uncacheRoot(this.model);
+    }
+  }
+}
+
+// Central Preloader & Skinned Instance Factory
+const CharacterAssetManager = {
+  cache: {},
+  loadingPromises: {},
+  modelDefs: {
+    wizard: { url: 'models/Wizard.glb', scale: 2.30 },
+    soldier: { url: 'models/Soldier.glb', scale: 3.95 },
+    knight: { url: 'models/Warrior.glb', scale: 2.40 },
+    robot: { url: 'models/Robot.glb', scale: 1.60 }
+  },
+
+  preload(type) {
+    const key = type.toLowerCase();
+    if (this.cache[key]) return Promise.resolve(this.cache[key]);
+    if (this.loadingPromises[key]) return this.loadingPromises[key];
+
+    const def = this.modelDefs[key];
+    if (!def) return Promise.reject(new Error("Unknown character type: " + type));
+
+    const loader = new THREE.GLTFLoader();
+    this.loadingPromises[key] = new Promise((resolve, reject) => {
+      loader.load(
+        def.url,
+        (gltf) => {
+          this.cache[key] = {
+            gltf: gltf,
+            scene: gltf.scene,
+            animations: gltf.animations,
+            scale: def.scale
+          };
+          resolve(this.cache[key]);
+        },
+        undefined,
+        (err) => {
+          console.error("Failed to load model:", def.url, err);
+          reject(err);
+        }
+      );
+    });
+
+    return this.loadingPromises[key];
+  },
+
+  preloadAll() {
+    return Promise.all(Object.keys(this.modelDefs).map((k) => this.preload(k)));
+  },
+
+  createInstance(type) {
+    const key = type.toLowerCase();
+    const cached = this.cache[key];
+    if (!cached) return null;
+
+    // Use Three.js SkeletonUtils to deep-clone skinned meshes and bind bones
+    const clonedScene = THREE.SkeletonUtils ? THREE.SkeletonUtils.clone(cached.scene) : cached.scene.clone();
+
+    // Enable high-fidelity shadows and ensure PBR surface response
+    clonedScene.traverse((node) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = true;
+        if (node.material) {
+          node.material.depthWrite = true;
+          if (node.material.map) {
+            node.material.map.encoding = THREE.sRGBEncoding;
+          }
+        }
+      }
+    });
+
+    const s = cached.scale;
+    clonedScene.scale.set(s, s, s);
+
+    const mixer = new THREE.AnimationMixer(clonedScene);
+    const controller = new CharacterAnimationController(clonedScene, mixer, cached.animations);
+
+    return {
+      model: clonedScene,
+      mixer: mixer,
+      controller: controller,
+      animations: cached.animations
+    };
+  }
+};
+
+// Immediately begin preloading all 4 production character models
+if (typeof window !== 'undefined' && typeof XMLHttpRequest !== 'undefined') {
+  CharacterAssetManager.preloadAll().catch((e) => console.warn("Background preload warning:", e));
+}
+
+// Base Controller for all 3D Characters
 class Character3DBase {
   constructor(name, x, y, z, scene) {
     this.name = name;
@@ -14,9 +197,6 @@ class Character3DBase {
     this.huntTimer = 0;
     this.alertTimer = 0;
     this.landingTimer = 0;
-    this.walkCycle = 0;
-    this.breathCycle = 0;
-    this.flailCycle = 0;
 
     this.attackCooldown = 0;
     this.speechText = '';
@@ -31,6 +211,67 @@ class Character3DBase {
     this.jumpOriginX = x;
     this.jumpTargetX = x;
     this.jumpProgress = 0;
+
+    // Model & Animation container
+    this.modelInstance = null;
+    this.model = null;
+    this.anim = null;
+    this.modelReady = false;
+
+    // Quips
+    this.quips = [];
+    this.fallQuips = [];
+    this.huntQuips = [];
+  }
+
+  attachGLTFModel(type, onReady) {
+    const setup = (instance) => {
+      if (!instance || !this.group) return;
+      this.modelInstance = instance;
+      this.model = instance.model;
+      this.anim = instance.controller;
+      this.group.add(this.model);
+      this.modelReady = true;
+
+      // Start in default idle pose
+      this.playIdle();
+
+      if (typeof onReady === 'function') {
+        onReady(this.model, this.anim);
+      }
+    };
+
+    const immediate = CharacterAssetManager.createInstance(type);
+    if (immediate) {
+      setup(immediate);
+    } else {
+      CharacterAssetManager.preload(type).then(() => {
+        const deferred = CharacterAssetManager.createInstance(type);
+        setup(deferred);
+      }).catch((err) => {
+        console.error("Error attaching character model:", type, err);
+      });
+    }
+  }
+
+  playIdle() {
+    if (!this.anim) return;
+    this.anim.play('Idle');
+  }
+
+  playMove(speed) {
+    if (!this.anim) return;
+    if (speed > 18) {
+      if (this.anim.getAction('Run') || this.anim.getAction('Running')) {
+        this.anim.play(this.anim.getAction('Run') ? 'Run' : 'Running');
+        return;
+      }
+    }
+    if (this.anim.getAction('Walk') || this.anim.getAction('Walking')) {
+      this.anim.play(this.anim.getAction('Walk') ? 'Walk' : 'Walking');
+    } else {
+      this.playIdle();
+    }
   }
 
   say(text, duration = 2.4) {
@@ -41,89 +282,32 @@ class Character3DBase {
     }
   }
 
-  updateCommon(dt, mouse3D, physics3D, sceneManager3D) {
-    this.breathCycle += dt * 3.5;
-
-    if (this.speechTimer > 0) {
-      this.speechTimer -= dt;
-      if (this.speechTimer <= 0) this.speechText = '';
+  onStartFreefall() {
+    if (this.anim) {
+      if (this.anim.getAction('Death')) this.anim.play('Death', 0.25, THREE.LoopOnce);
+      else if (this.anim.getAction('Jump')) this.anim.play('Jump', 0.25, THREE.LoopOnce);
     }
-
-    if (sceneManager3D.isCollapsing) {
-      if (this.state !== 'FREEFALL') {
-        this.state = 'FREEFALL';
-        this.onStartFreefall();
-      }
-      this.flailCycle += dt * 14;
-      this.group.position.x += (0 - this.group.position.x) * 1.5 * dt;
-
-      this.attackCooldown -= dt;
-      if (this.attackCooldown <= 0 && mouse3D.active) {
-        this.attackCooldown = 0.85;
-        this.fireUpwardAtCursor(mouse3D, physics3D);
-      }
-      return;
-    } else if (this.state === 'FREEFALL') {
-      this.state = 'LANDING';
-      this.landingTimer = 0.7;
-      this.onLandImpact();
+    if (this.fallQuips && this.fallQuips.length > 0) {
+      this.say(this.fallQuips[Math.floor(Math.random() * this.fallQuips.length)], 3.0);
     }
+  }
 
-    if (this.state === 'LANDING') {
-      this.landingTimer -= dt;
-      if (this.landingTimer <= 0) this.state = 'ATTACKING';
-      return;
+  onLandImpact() {
+    this.playIdle();
+    if (window.soundEngine) window.soundEngine.playHeavyExplosion(0.85);
+  }
+
+  onStartHunting(lastExitPos) {
+    this.playMove(10);
+    if (this.huntQuips && this.huntQuips.length > 0) {
+      this.say(this.huntQuips[Math.floor(Math.random() * this.huntQuips.length)], 2.8);
     }
+  }
 
-    if (!mouse3D.active) {
-      if (this.state !== 'HUNTING') {
-        this.state = 'HUNTING';
-        this.huntTimer = 0;
-        this.huntScanTimer = 1.5;
-        this.huntPatrolTargetX = mouse3D.lastExitWorldX || (this.facing * 35);
-        this.onStartHunting(mouse3D.lastExitPos);
-      } else {
-        this.huntTimer += dt;
-        this.huntScanTimer -= dt;
-
-        // Active perimeter sweep and hunting loop
-        if (this.huntScanTimer <= 0) {
-          const roll = Math.random();
-          if (roll < 0.45) {
-            // Rush toward left/right border where cursor escaped
-            const exitSign = (mouse3D.lastExitWorldX || 0) >= 0 ? 1 : -1;
-            this.huntPatrolTargetX = exitSign * (36 + Math.random() * 6);
-            this.huntScanTimer = 3.0 + Math.random() * 2.0;
-            if (Math.random() < 0.5) window.soundEngine.playSonarPing();
-            this.onScanBorder();
-          } else if (roll < 0.8) {
-            // Patrol across arena to other side
-            this.huntPatrolTargetX = (Math.random() * 2 - 1) * 36;
-            this.huntScanTimer = 3.5 + Math.random() * 2.0;
-            if (Math.random() < 0.4) this.onScanBorder();
-          } else {
-            // Stand and scan border
-            this.huntScanTimer = 2.0;
-            if (Math.random() < 0.4) this.onScanBorder();
-          }
-        }
-      }
-    } else {
-      if (this.state === 'HUNTING') {
-        this.state = 'ALERT';
-        this.alertTimer = 0.6;
-        this.onSpotCursor();
-      } else if (this.state === 'ALERT') {
-        this.alertTimer -= dt;
-        if (this.alertTimer <= 0) this.state = 'ATTACKING';
-      }
-    }
-
-    if (this.state !== 'HUNTING') {
-      const targetX = mouse3D.active ? mouse3D.worldX : (mouse3D.lastExitWorldX || this.group.position.x + this.facing * 10);
-      this.facing = targetX > this.group.position.x ? 1 : -1;
-      this.group.rotation.y = this.facing === 1 ? 0 : Math.PI;
-    }
+  onSpotCursor() {
+    this.playIdle();
+    this.say("TARGET RE-ACQUIRED! ENGAGING!");
+    if (window.soundEngine) window.soundEngine.playAlertStinger();
   }
 
   onScanBorder() {
@@ -245,6 +429,9 @@ class Character3DBase {
           this.jumpOriginX = px;
           this.jumpTargetX = safeX;
           this.jumpProgress = 0;
+          if (this.anim) {
+            if (this.anim.getAction('Jump')) this.anim.playOnce('Jump', 'Idle');
+          }
           if (window.soundEngine && typeof window.soundEngine.playJavelinThrow === 'function') {
             window.soundEngine.playJavelinThrow();
           }
@@ -266,419 +453,135 @@ class Character3DBase {
       this.group.position.z += (desiredZ - this.group.position.z) * 4.0 * dt;
     }
     this.resolveEnvironmentCollisions(dt, sceneManager3D, physics3D);
+
+    // Update skeletal animation mixer
+    if (this.anim) {
+      this.anim.update(dt);
+    }
   }
 
-  calculateHumanoidGait(cycle) {
-    const computeLeg = (phase) => {
-      const sinP = Math.sin(phase);
-      const cosP = Math.cos(phase);
+  updateCommon(dt, mouse3D, physics3D, sceneManager3D) {
+    if (this.speechTimer > 0) {
+      this.speechTimer -= dt;
+      if (this.speechTimer <= 0) this.speechText = '';
+    }
 
-      // Hip swings in local Z axis (forward is +Z rotation, backward is -Z rotation)
-      const hip = sinP * 0.48;
+    if (sceneManager3D.isCollapsing) {
+      if (this.state !== 'FREEFALL') {
+        this.state = 'FREEFALL';
+        this.onStartFreefall();
+      }
+      this.group.position.x += (0 - this.group.position.x) * 1.5 * dt;
 
-      // Knee flexion: bends backward only (-Z rotation)
-      // Active flexion during trailing swing phase (sinP < 0)
-      let knee = 0;
-      if (sinP < 0) {
-        knee = -Math.pow(-sinP, 1.25) * 1.22 - 0.08;
-      } else if (cosP < 0) {
-        knee = -cosP * cosP * 0.38 - 0.08;
+      this.attackCooldown -= dt;
+      if (this.attackCooldown <= 0 && mouse3D.active) {
+        this.attackCooldown = 0.85;
+        this.fireUpwardAtCursor(mouse3D, physics3D);
+      }
+      return;
+    } else if (this.state === 'FREEFALL') {
+      this.state = 'LANDING';
+      this.landingTimer = 0.7;
+      this.onLandImpact();
+    }
+
+    if (this.state === 'LANDING') {
+      this.landingTimer -= dt;
+      if (this.landingTimer <= 0) this.state = 'ATTACKING';
+      return;
+    }
+
+    if (!mouse3D.active) {
+      if (this.state !== 'HUNTING') {
+        this.state = 'HUNTING';
+        this.huntTimer = 0;
+        this.huntScanTimer = 1.5;
+        this.huntPatrolTargetX = mouse3D.lastExitWorldX || (this.facing * 35);
+        this.onStartHunting(mouse3D.lastExitPos);
       } else {
-        knee = -0.06; // stance shock absorption micro-flexion
+        this.huntTimer += dt;
+        this.huntScanTimer -= dt;
+
+        if (this.huntScanTimer <= 0) {
+          const roll = Math.random();
+          if (roll < 0.45) {
+            const exitSign = (mouse3D.lastExitWorldX || 0) >= 0 ? 1 : -1;
+            this.huntPatrolTargetX = exitSign * (36 + Math.random() * 6);
+            this.huntScanTimer = 3.0 + Math.random() * 2.0;
+            if (Math.random() < 0.5 && window.soundEngine) window.soundEngine.playSonarPing();
+            this.onScanBorder();
+          } else if (roll < 0.8) {
+            this.huntPatrolTargetX = (Math.random() * 2 - 1) * 36;
+            this.huntScanTimer = 3.5 + Math.random() * 2.0;
+            if (Math.random() < 0.4) this.onScanBorder();
+          } else {
+            this.huntScanTimer = 2.0;
+            if (Math.random() < 0.4) this.onScanBorder();
+          }
+        }
       }
-
-      // Ankle articulation: heel-strike dorsiflexion and push-off plantarflexion
-      let ankle = 0;
-      if (sinP > 0.35) {
-        ankle = 0.22;
-      } else if (sinP < -0.25) {
-        ankle = -0.32;
+    } else {
+      if (this.state === 'HUNTING') {
+        this.state = 'ALERT';
+        this.alertTimer = 0.6;
+        this.onSpotCursor();
+      } else if (this.state === 'ALERT') {
+        this.alertTimer -= dt;
+        if (this.alertTimer <= 0) this.state = 'ATTACKING';
       }
-
-      return { hip, knee, ankle };
-    };
-
-    const legL = computeLeg(cycle);
-    const legR = computeLeg(cycle + Math.PI);
-    const bounceY = Math.abs(Math.sin(cycle)) * 0.28;
-    const swayY = Math.sin(cycle) * 0.08;
-    const rollZ = Math.cos(cycle) * 0.035;
-    const torsoTwistY = -Math.sin(cycle) * 0.12;
-
-    return { legL, legR, bounceY, swayY, rollZ, torsoTwistY };
-  }
-
-  buildSculptedHead(characterType, skinTone = 'fair', eyeColor = 0x22c55e) {
-    const headGroup = new THREE.Group();
-    const skinTex = TextureGen.createHumanSkinTexture(skinTone);
-
-    const skinMat = new THREE.MeshStandardMaterial({
-      map: skinTex,
-      bumpMap: skinTex,
-      bumpScale: 0.04,
-      roughness: 0.55,
-      metalness: 0.05
-    });
-
-    // Cranium
-    const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.78, 20, 20), skinMat);
-    cranium.scale.set(0.9, 1.05, 0.95);
-    cranium.castShadow = true;
-    headGroup.add(cranium);
-
-    // Anatomical Jaw & Smooth Contoured Chin (tapers forward toward +X)
-    const jaw = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.38, 0.75, 14), skinMat);
-    jaw.position.set(0.12, -0.45, 0);
-    jaw.scale.set(0.95, 1, 0.85);
-    headGroup.add(jaw);
-
-    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 10), skinMat);
-    chin.position.set(0.42, -0.65, 0);
-    chin.scale.set(1.2, 0.85, 1.1);
-    headGroup.add(chin);
-
-    // Sculpted Cheekbones (Zygomatic arches)
-    for (const z of [0.42, -0.42]) {
-      const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.24, 8, 8), skinMat);
-      cheek.position.set(0.38, -0.15, z);
-      cheek.scale.set(1.1, 0.7, 0.9);
-      headGroup.add(cheek);
     }
 
-    // Neck
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.48, 0.85, 14), skinMat);
-    neck.position.set(-0.05, -0.95, 0);
-    headGroup.add(neck);
+    // Orient character towards cursor in 3D (with subtle camera forward bias)
+    if (this.state !== 'HUNTING') {
+      const targetX = mouse3D.active ? mouse3D.worldX : (mouse3D.lastExitWorldX || this.group.position.x + this.facing * 10);
+      const targetZ = mouse3D.active ? mouse3D.worldZ : 0;
+      const dx = targetX - this.group.position.x;
+      const dz = targetZ - this.group.position.z;
 
-    // Sculpted 3D Eyes with Sclera, Iris, Pupil, Corneal Catchlight & Lids
-    const scleraMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.2 });
-    const irisMat = new THREE.MeshStandardMaterial({
-      color: eyeColor,
-      roughness: 0.1,
-      metalness: 0.1,
-      emissive: characterType === 'wizard' ? eyeColor : 0x000000,
-      emissiveIntensity: characterType === 'wizard' ? 0.85 : 0
-    });
-    const pupilMat = new THREE.MeshStandardMaterial({ color: 0x020617, roughness: 0.1 });
-    const glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      this.facing = dx >= 0 ? 1 : -1;
 
-    const zOffsets = [0.32, -0.32];
-    for (const z of zOffsets) {
-      const eyeGroup = new THREE.Group();
-      eyeGroup.position.set(0.62, 0.05, z);
+      // In Three.js GLTF, forward is +Z. To face target at (dx, dz):
+      // Camera is at +Z looking at 0, so targetAngle = atan2(dx, dz + 5) creates a natural 3/4 frontal view
+      const targetAngle = Math.atan2(dx, dz + 5.5);
 
-      // Eyeball
-      const eyeball = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 12), scleraMat);
-      eyeball.scale.set(0.65, 0.95, 1);
-      eyeGroup.add(eyeball);
-
-      // Iris
-      const iris = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.04, 12), irisMat);
-      iris.rotation.z = Math.PI / 2;
-      iris.position.set(0.11, 0, 0);
-      eyeGroup.add(iris);
-
-      // Pupil
-      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), pupilMat);
-      pupil.position.set(0.13, 0, 0);
-      eyeGroup.add(pupil);
-
-      // Corneal catchlight
-      const glint = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 6), glintMat);
-      glint.position.set(0.14, 0.04, 0.03);
-      eyeGroup.add(glint);
-
-      // Upper Eyelid Arch
-      const upperLid = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.035, 6, 10, Math.PI), skinMat);
-      upperLid.position.set(0.06, 0.08, 0);
-      upperLid.rotation.y = Math.PI / 2;
-      upperLid.rotation.x = Math.PI;
-      eyeGroup.add(upperLid);
-
-      headGroup.add(eyeGroup);
+      let diff = targetAngle - this.group.rotation.y;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      this.group.rotation.y += diff * Math.min(1.0, 9.0 * dt);
     }
-
-    // Sculpted Brow Ridges
-    const browColor = characterType === 'wizard' ? 0xd1d5db : 0x29140a;
-    const browMat = new THREE.MeshStandardMaterial({ color: browColor, roughness: 0.8 });
-    for (const z of zOffsets) {
-      const brow = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.04, 6, 10, Math.PI * 0.75), browMat);
-      brow.position.set(0.62, 0.22, z);
-      brow.rotation.y = z > 0 ? 0.3 : -0.3;
-      brow.rotation.x = Math.PI * 0.55;
-      headGroup.add(brow);
-    }
-
-    // Sculpted 3D Nose
-    const noseBridge = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.14, 0.45, 8), skinMat);
-    noseBridge.position.set(0.72, -0.05, 0);
-    noseBridge.rotation.z = -0.32;
-    headGroup.add(noseBridge);
-
-    const noseTip = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 10), skinMat);
-    noseTip.position.set(0.85, -0.22, 0);
-    headGroup.add(noseTip);
-
-    const nostrilL = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), skinMat);
-    nostrilL.position.set(0.78, -0.25, 0.12);
-    headGroup.add(nostrilL);
-    const nostrilR = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), skinMat);
-    nostrilR.position.set(0.78, -0.25, -0.12);
-    headGroup.add(nostrilR);
-
-    // Sculpted 3D Lips (Smooth Vermilion Contours)
-    const lipMat = new THREE.MeshStandardMaterial({ color: 0x9f4a3c, roughness: 0.5 });
-    const upperLip = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8), lipMat);
-    upperLip.position.set(0.68, -0.42, 0);
-    upperLip.scale.set(1.1, 0.5, 1.8);
-    headGroup.add(upperLip);
-
-    const lowerLip = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 8), lipMat);
-    lowerLip.position.set(0.65, -0.52, 0);
-    lowerLip.scale.set(1.1, 0.6, 1.6);
-    headGroup.add(lowerLip);
-
-    // Anatomical Ears
-    for (const z of [0.72, -0.72]) {
-      const ear = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.06, 6, 12, Math.PI * 1.3), skinMat);
-      ear.position.set(-0.05, 0.02, z);
-      ear.rotation.y = z > 0 ? 0 : Math.PI;
-      ear.rotation.z = 0.2;
-      headGroup.add(ear);
-    }
-
-    return { headGroup, cranium, skinMat };
-  }
-
-  createSculptedFoot(bootMat, style = 'combat') {
-    const footGroup = new THREE.Group();
-
-    // 1. Contoured Sole with arch & heel lift
-    const sole = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.22, 0.56), bootMat);
-    sole.position.set(0.42, -0.32, 0);
-    sole.castShadow = true;
-    footGroup.add(sole);
-
-    // 2. Heel block
-    const heel = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.26, 0.54), bootMat);
-    heel.position.set(-0.06, -0.28, 0);
-    heel.castShadow = true;
-    footGroup.add(heel);
-
-    // 3. Rounded Toe Cap (curves upward at front)
-    const toeCap = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 10, 0, Math.PI), bootMat);
-    toeCap.rotation.y = Math.PI / 2;
-    toeCap.rotation.x = Math.PI / 2;
-    toeCap.position.set(0.92, -0.16, 0);
-    toeCap.scale.set(0.9, 0.7, 1);
-    toeCap.castShadow = true;
-    footGroup.add(toeCap);
-
-    // 4. Instep & Vamp (slopes upward toward ankle)
-    const instep = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.34, 0.75, 10), bootMat);
-    instep.rotation.z = Math.PI / 3;
-    instep.position.set(0.45, -0.12, 0);
-    instep.scale.set(1, 0.9, 0.85);
-    instep.castShadow = true;
-    footGroup.add(instep);
-
-    // 5. Padded Ankle Collar (seamlessly wraps around lower shin)
-    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.35, 0.55, 12), bootMat);
-    collar.position.set(0.08, 0.05, 0);
-    collar.castShadow = true;
-    footGroup.add(collar);
-
-    return footGroup;
-  }
-
-  createSculptedHand(handMat, isGlove = false, fingerFlex = 0.5) {
-    const handGroup = new THREE.Group();
-
-    // Palm base with thenar eminence
-    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.45, 0.26), handMat);
-    palm.position.set(0.12, -0.22, 0);
-    palm.castShadow = true;
-    handGroup.add(palm);
-
-    // Opposable Thumb
-    const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.28, 8), handMat);
-    thumb.position.set(0.18, -0.15, 0.16);
-    thumb.rotation.z = -Math.PI / 4;
-    thumb.rotation.x = Math.PI / 4;
-    thumb.castShadow = true;
-    handGroup.add(thumb);
-
-    // 4 Articulated Fingers (Index, Middle, Ring, Pinky)
-    const fingerOffsets = [0.09, 0.03, -0.03, -0.09];
-    const fingerLengths = [0.30, 0.34, 0.32, 0.26];
-    for (let i = 0; i < 4; i++) {
-      const finger = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, fingerLengths[i], 8), handMat);
-      finger.position.set(0.18 + fingerFlex * 0.05, -0.42 - fingerLengths[i] * 0.35, fingerOffsets[i]);
-      finger.rotation.z = -fingerFlex;
-      finger.castShadow = true;
-      handGroup.add(finger);
-    }
-
-    return handGroup;
-  }
-
-  buildArticulatedLeg(thighMat, kneeMat, shinMat, bootMat, side = 1, style = 'combat') {
-    const hip = new THREE.Group();
-    hip.position.set(0, 0, side * 0.55);
-
-    // 1. Anatomical Muscular Thigh (LatheGeometry with smooth quadriceps curvature)
-    const thighPts = [
-      [0, 0.15],
-      [0.52, 0.0],
-      [0.58, -0.45],
-      [0.50, -0.9],
-      [0.40, -1.35],
-      [0.35, -1.58],
-      [0, -1.65]
-    ].map(p => new THREE.Vector2(p[0], p[1]));
-    const thighGeom = new THREE.LatheGeometry(thighPts, 16);
-    thighGeom.computeVertexNormals();
-
-    const thigh = new THREE.Mesh(thighGeom, thighMat);
-    thigh.scale.set(1.0, 1.0, 0.9);
-    thigh.castShadow = true;
-    hip.add(thigh);
-
-    // 2. Seamless Knee Hinge (NO BALL BEARING!)
-    const knee = new THREE.Group();
-    knee.position.y = -1.6;
-    hip.add(knee);
-
-    // Anatomical Patella Tendon Guard / Knee Plate
-    const patella = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.48, 12), kneeMat);
-    patella.position.set(0.18, 0, 0);
-    patella.scale.set(0.65, 1, 0.85);
-    patella.castShadow = true;
-    knee.add(patella);
-
-    // 3. Anatomical Shin / Muscular Calf (LatheGeometry with gastrocnemius bulge)
-    const shinPts = [
-      [0, 0.08],
-      [0.38, 0.0],
-      [0.48, -0.42],
-      [0.42, -0.85],
-      [0.32, -1.25],
-      [0.27, -1.55],
-      [0, -1.62]
-    ].map(p => new THREE.Vector2(p[0], p[1]));
-    const shinGeom = new THREE.LatheGeometry(shinPts, 16);
-    shinGeom.computeVertexNormals();
-
-    const shin = new THREE.Mesh(shinGeom, shinMat);
-    shin.scale.set(1.0, 1.0, 0.88);
-    shin.castShadow = true;
-    knee.add(shin);
-
-    // 4. Ankle Joint & Sculpted Footwear (NO BOX!)
-    const ankle = new THREE.Group();
-    ankle.position.y = -1.6;
-    knee.add(ankle);
-
-    const foot = this.createSculptedFoot(bootMat, style);
-    ankle.add(foot);
-
-    return { hip, knee, ankle, thigh, patella, shin, foot };
-  }
-
-  buildArticulatedArm(upperMat, elbowMat, forearmMat, handMat, side = 1, isGlove = false) {
-    const shoulder = new THREE.Group();
-    shoulder.position.set(0, 0, side * 1.0);
-
-    // 1. Anatomical Deltoid Shoulder Cap covering the joint seamlessly
-    const deltoid = new THREE.Mesh(new THREE.SphereGeometry(0.48, 14, 14), upperMat);
-    deltoid.position.set(0, 0.05, 0);
-    deltoid.scale.set(0.9, 1.15, 0.95);
-    deltoid.castShadow = true;
-    shoulder.add(deltoid);
-
-    // 2. Anatomical Muscular Upper Arm (LatheGeometry with bicep/tricep volume)
-    const armPts = [
-      [0, 0.12],
-      [0.44, 0.0],
-      [0.42, -0.35],
-      [0.38, -0.75],
-      [0.30, -1.15],
-      [0.26, -1.35],
-      [0, -1.40]
-    ].map(p => new THREE.Vector2(p[0], p[1]));
-    const armGeom = new THREE.LatheGeometry(armPts, 14);
-    armGeom.computeVertexNormals();
-
-    const upperArm = new THREE.Mesh(armGeom, upperMat);
-    upperArm.scale.set(1.0, 1.0, 0.9);
-    upperArm.castShadow = true;
-    shoulder.add(upperArm);
-
-    // 3. Seamless Elbow Hinge (NO BALL BEARING!)
-    const elbow = new THREE.Group();
-    elbow.position.y = -1.35;
-    shoulder.add(elbow);
-
-    // Anatomical Olecranon / Elbow Guard
-    const elbowCop = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 10), elbowMat);
-    elbowCop.position.set(-0.1, 0, 0);
-    elbowCop.scale.set(0.85, 0.85, 0.8);
-    elbowCop.castShadow = true;
-    elbow.add(elbowCop);
-
-    // 4. Anatomical Muscular Forearm (LatheGeometry with brachioradialis bulge)
-    const forearmPts = [
-      [0, 0.06],
-      [0.28, 0.0],
-      [0.36, -0.32],
-      [0.30, -0.72],
-      [0.24, -1.12],
-      [0.21, -1.35],
-      [0, -1.40]
-    ].map(p => new THREE.Vector2(p[0], p[1]));
-    const forearmGeom = new THREE.LatheGeometry(forearmPts, 14);
-    forearmGeom.computeVertexNormals();
-
-    const forearm = new THREE.Mesh(forearmGeom, forearmMat);
-    forearm.scale.set(1.0, 1.0, 0.88);
-    forearm.castShadow = true;
-    elbow.add(forearm);
-
-    // 5. Wrist Joint & Sculpted Multi-Finger Hand (NO BRICK!)
-    const wrist = new THREE.Group();
-    wrist.position.y = -1.35;
-    elbow.add(wrist);
-
-    const hand = this.createSculptedHand(handMat, isGlove);
-    wrist.add(hand);
-
-    return { shoulder, elbow, wrist, upperArm, elbowCop, forearm, hand };
   }
 
   dispose() {
+    if (this.anim) {
+      this.anim.dispose();
+      this.anim = null;
+    }
     if (this.group) {
       this.scene.remove(this.group);
-      this.group.traverse(child => {
-        if (child.isMesh) {
+      if (this.rifleGroup) {
+        this.rifleGroup.traverse((child) => {
           if (child.geometry) child.geometry.dispose();
           if (child.material) {
-            if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
             else child.material.dispose();
           }
-        }
-      });
+        });
+        this.rifleGroup = null;
+      }
+      this.group = null;
     }
   }
 }
 
 // ==========================================
-// 1. SCULPTED WIZARD 3D (Anatomical Arcane Sage)
+// 1. PRODUCTION 3D WIZARD (Skinned Arcane Sage)
 // ==========================================
 class Wizard3D extends Character3DBase {
   constructor(x, y, z, scene) {
     super('Wizard', x, y, z, scene);
-    this.castPhase = 'IDLE';
-    this.castTimer = 0;
+    this.collisionRadius = 1.8;
+    this.moveSpeed = 16;
+
     this.say("THE FOUNDATIONS CANNOT WITHSTAND MY ARCANE FIRE!");
     this.quips = [
       "DIE, INSOLENT GLYPH!",
@@ -699,348 +602,50 @@ class Wizard3D extends Character3DBase {
       "REVEAL THYSELF BEFORE I TEAR THE VEIL ASUNDER!"
     ];
 
-    this.buildMesh();
+    this.attachGLTFModel('wizard', (model) => {
+      // Find staff mesh and attach pulsing arcane aura light
+      const staffMesh = model.getObjectByName('Wizard_Staff');
+      this.orbLight = new THREE.PointLight(0xc084fc, 1.2, 14);
+      this.orbLight.position.set(0, 0.45, 0);
+
+      const staffBone = model.getObjectByName('WeaponR');
+      if (staffBone) {
+        staffBone.add(this.orbLight);
+      } else if (staffMesh) {
+        staffMesh.add(this.orbLight);
+      } else {
+        this.group.add(this.orbLight);
+      }
+    });
   }
 
-  buildMesh() {
-    const robeTex = TextureGen.createFabricTexture('#1e1b4b');
-    const leatherTex = TextureGen.createLeatherTexture('#451a03');
-    const woodTex = TextureGen.createWoodTexture();
-
-    const robeMat = new THREE.MeshStandardMaterial({
-      map: robeTex,
-      bumpMap: robeTex,
-      bumpScale: 0.08,
-      roughness: 0.72,
-      metalness: 0.1
-    });
-
-    const goldMat = new THREE.MeshStandardMaterial({
-      color: 0xd97706,
-      metalness: 0.88,
-      roughness: 0.22
-    });
-
-    const leatherMat = new THREE.MeshStandardMaterial({
-      map: leatherTex,
-      roughness: 0.6,
-      metalness: 0.1
-    });
-
-    const woodMat = new THREE.MeshStandardMaterial({
-      map: woodTex,
-      roughness: 0.75,
-      metalness: 0.05
-    });
-
-    const beardMat = new THREE.MeshStandardMaterial({
-      color: 0xe2e8f0,
-      roughness: 0.85
-    });
-
-    // 1. Pelvis Center & Ornate Leather Belt
-    this.pelvis = new THREE.Group();
-    this.pelvis.position.y = 3.65;
-    this.group.add(this.pelvis);
-
-    const beltGeom = new THREE.CylinderGeometry(0.95, 0.9, 0.45, 14);
-    const belt = new THREE.Mesh(beltGeom, leatherMat);
-    this.pelvis.add(belt);
-
-    const buckle = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.06, 6, 12), goldMat);
-    buckle.position.set(0.95, 0, 0);
-    buckle.rotation.y = Math.PI / 2;
-    this.pelvis.add(buckle);
-
-    // Spell Scroll Holster & Potion Phial on Belt
-    const scrollHolster = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.85, 10), leatherMat);
-    scrollHolster.rotation.z = Math.PI / 4;
-    scrollHolster.position.set(-0.2, -0.3, -0.95);
-    this.pelvis.add(scrollHolster);
-
-    const potion = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 10), new THREE.MeshStandardMaterial({
-      color: 0x06b6d4,
-      emissive: 0x0891b2,
-      emissiveIntensity: 0.6,
-      roughness: 0.1
-    }));
-    potion.position.set(0.2, -0.35, 0.95);
-    this.pelvis.add(potion);
-
-    // Flowing Flared Robe Skirt (split front allowing leg motion)
-    const skirtGeom = new THREE.CylinderGeometry(1.05, 2.3, 4.2, 16, 4, true);
-    this.skirt = new THREE.Mesh(skirtGeom, robeMat);
-    this.skirt.position.y = -1.9;
-    this.skirt.castShadow = true;
-    this.pelvis.add(this.skirt);
-
-    // Gold embroidered hem trim along robe
-    const skirtTrim = new THREE.Mesh(new THREE.TorusGeometry(2.28, 0.1, 6, 16), goldMat);
-    skirtTrim.rotation.x = Math.PI / 2;
-    skirtTrim.position.y = -3.95;
-    this.pelvis.add(skirtTrim);
-
-    // 2. Articulated Legs Underneath Robes (Turnshoes)
-    const shoeMat = new THREE.MeshStandardMaterial({ color: 0x2e1065, roughness: 0.6 });
-    this.legLData = this.buildArticulatedLeg(robeMat, goldMat, robeMat, shoeMat, 1);
-    this.pelvis.add(this.legLData.hip);
-    this.legL = this.legLData.hip; // backwards compat
-
-    this.legRData = this.buildArticulatedLeg(robeMat, goldMat, robeMat, shoeMat, -1);
-    this.pelvis.add(this.legRData.hip);
-    this.legR = this.legRData.hip; // backwards compat
-
-    // 3. Spine & Embroidered Torso
-    this.spine = new THREE.Group();
-    this.pelvis.add(this.spine);
-
-    const midriff = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.95, 0.85, 14), robeMat);
-    midriff.position.y = 0.5;
-    this.spine.add(midriff);
-
-    this.chest = new THREE.Group();
-    this.chest.position.y = 1.05;
-    this.spine.add(this.chest);
-
-    // Upper Velvet Cassock (sculpted anatomical robe chest)
-    const cassockPts = [
-      [0, 1.35],
-      [0.8, 1.3],
-      [1.25, 1.05],
-      [1.35, 0.65],
-      [1.15, 0.25],
-      [0.95, -0.2],
-      [1.02, -0.65],
-      [0, -0.75]
-    ].map(p => new THREE.Vector2(p[0], p[1]));
-    const cassockGeom = new THREE.LatheGeometry(cassockPts, 18);
-    cassockGeom.computeVertexNormals();
-
-    const chest = new THREE.Mesh(cassockGeom, robeMat);
-    chest.position.y = 0.55;
-    chest.scale.set(1.0, 1.0, 0.88);
-    chest.castShadow = true;
-    this.chest.add(chest);
-
-    // High Velvet Cowl Collar with Astrological Shoulder Clasps
-    const cowl = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.25, 8, 16), robeMat);
-    cowl.position.set(0, 1.5, 0);
-    cowl.rotation.x = Math.PI / 2;
-    this.chest.add(cowl);
-
-    for (const z of [1.1, -1.1]) {
-      const clasp = new THREE.Mesh(new THREE.OctahedronGeometry(0.25), goldMat);
-      clasp.position.set(0.1, 1.45, z);
-      this.chest.add(clasp);
+  playIdle() {
+    if (!this.anim) return;
+    if (this.anim.getAction('Idle_Weapon')) {
+      this.anim.play('Idle_Weapon');
+    } else {
+      this.anim.play('Idle');
     }
-
-    // 4. Sage Head, Flowing Hair, Volumetric Beard & Conical Hat
-    const headData = this.buildSculptedHead('wizard', 'fair', 0x06b6d4);
-    this.headGroup = headData.headGroup;
-    this.headGroup.position.set(0.05, 1.95, 0);
-    this.chest.add(this.headGroup);
-
-    // Flowing Layered Volumetric Beard
-    this.beardGroup = new THREE.Group();
-    this.beardGroup.position.set(0.55, -0.45, 0);
-
-    const mainBeard = new THREE.Mesh(new THREE.ConeGeometry(0.72, 2.7, 12), beardMat);
-    mainBeard.position.set(0.15, -1.1, 0);
-    mainBeard.rotation.z = -0.25;
-    this.beardGroup.add(mainBeard);
-
-    for (const side of [0.35, -0.35]) {
-      const sideLock = new THREE.Mesh(new THREE.ConeGeometry(0.38, 2.2, 8), beardMat);
-      sideLock.position.set(0.05, -0.9, side);
-      sideLock.rotation.z = -0.2;
-      sideLock.rotation.x = side > 0 ? 0.15 : -0.15;
-      this.beardGroup.add(sideLock);
-    }
-
-    // Contoured Mustache framing lips
-    const mustacheL = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.85, 6), beardMat);
-    mustacheL.position.set(0.2, 0.05, 0.35);
-    mustacheL.rotation.z = Math.PI / 2;
-    mustacheL.rotation.y = 0.3;
-    this.beardGroup.add(mustacheL);
-
-    const mustacheR = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.85, 6), beardMat);
-    mustacheR.position.set(0.2, 0.05, -0.35);
-    mustacheR.rotation.z = Math.PI / 2;
-    mustacheR.rotation.y = -0.3;
-    this.beardGroup.add(mustacheR);
-
-    this.headGroup.add(this.beardGroup);
-
-    // Silver Hair Locks falling behind shoulders
-    for (const z of [0.55, -0.55]) {
-      const hairLock = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.15, 2.0, 8), beardMat);
-      hairLock.position.set(-0.55, -0.65, z);
-      hairLock.rotation.z = 0.2;
-      this.headGroup.add(hairLock);
-    }
-
-    // Wide-Brimmed Conical Wizard Hat with Curled Tip
-    const brim = new THREE.Mesh(new THREE.CylinderGeometry(2.35, 2.35, 0.14, 24), robeMat);
-    brim.position.set(-0.05, 0.65, 0);
-    this.headGroup.add(brim);
-
-    const hatBand = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.12, 6, 16), goldMat);
-    hatBand.position.set(-0.05, 0.72, 0);
-    hatBand.rotation.x = Math.PI / 2;
-    this.headGroup.add(hatBand);
-
-    const hatCone = new THREE.Mesh(new THREE.ConeGeometry(1.2, 3.6, 16), robeMat);
-    hatCone.position.set(-0.35, 2.35, 0);
-    hatCone.rotation.z = 0.22;
-    hatCone.castShadow = true;
-    this.headGroup.add(hatCone);
-
-    // 5. Articulated Arms, Bell Sleeves & Somatic Casting Hand
-    this.armRData = this.buildArticulatedArm(robeMat, goldMat, robeMat, headData.skinMat, -1);
-    this.armRData.shoulder.position.set(-0.1, 1.25, -1.05);
-    this.chest.add(this.armRData.shoulder);
-
-    this.armLData = this.buildArticulatedArm(robeMat, goldMat, robeMat, headData.skinMat, 1);
-    this.armLData.shoulder.position.set(0.12, 1.25, 1.05);
-    this.chest.add(this.armLData.shoulder);
-
-    // Flared Bell Sleeves draped over forearms
-    for (const arm of [this.armRData, this.armLData]) {
-      const bellSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.65, 1.4, 12, 1, true), robeMat);
-      bellSleeve.position.y = -0.7;
-      arm.forearm.add(bellSleeve);
-    }
-
-    // 6. Gnarled Ancient Wooden Staff with Amethyst Crown
-    this.staff = new THREE.Group();
-    this.baseStaffPos = new THREE.Vector3(1.8, 0.6, -0.6);
-    this.staff.position.copy(this.baseStaffPos);
-
-    const staffShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 9.6, 10), woodMat);
-    staffShaft.position.y = 1.8;
-    staffShaft.castShadow = true;
-    this.staff.add(staffShaft);
-
-    // Root Claw Prongs holding gem
-    const rootProng = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.14, 8, 12), goldMat);
-    rootProng.position.set(0, 6.4, 0);
-    rootProng.rotation.x = Math.PI / 2;
-    this.staff.add(rootProng);
-
-    // Faceted Pulsing Amethyst Gem
-    const gemMat = new THREE.MeshStandardMaterial({
-      color: 0xc084fc,
-      emissive: 0xa855f7,
-      emissiveIntensity: 1.2,
-      roughness: 0.05,
-      metalness: 0.1
-    });
-    this.gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.75), gemMat);
-    this.gem.position.set(0, 6.6, 0);
-    this.staff.add(this.gem);
-
-    this.staffLight = new THREE.PointLight(0xa855f7, 2.5, 18);
-    this.staffLight.position.set(0, 6.6, 0);
-    this.staff.add(this.staffLight);
-
-    this.chest.add(this.staff);
-
-    // Right arm holds staff firmly
-    this.armRData.shoulder.rotation.set(-0.2, 0.2, 0.65);
-    this.armRData.elbow.rotation.set(0, 0, -0.75);
-
-    // Left arm: somatic casting posture (ready to channel spells)
-    this.armLData.shoulder.rotation.set(0.3, -0.2, 0.6);
-    this.armLData.elbow.rotation.set(0, 0, -0.8);
-  }
-
-  onStartFreefall() {
-    this.say(this.fallQuips[Math.floor(Math.random() * this.fallQuips.length)], 3.0);
-  }
-
-  onLandImpact() {
-    this.say("A CRUDE LANDING... BUT THOU CANST NOT ESCAPE!", 2.2);
-  }
-
-  onStartHunting(lastExitPos) {
-    this.say(this.huntQuips[0]);
-    window.soundEngine.playSonarPing();
-    this.huntPatrolTargetX = lastExitPos ? Math.max(-42, Math.min(42, (lastExitPos.x / window.innerWidth) * 88 - 44)) : (this.facing * 36);
-  }
-
-  onSpotCursor() {
-    this.say("AHA! IT RETURNS FROM THE VOID!");
-    window.soundEngine.playAlert();
   }
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
     this.updateCommon(dt, mouse3D, physics3D, sceneManager3D);
-
-    const hoverY = this.state === 'FREEFALL' ? 4 : 0.8 + Math.sin(this.breathCycle) * 0.35;
-    this.group.position.y = hoverY;
-
-    // Gem rotation and arcane pulse
-    if (this.gem) {
-      this.gem.rotation.y += 2.2 * dt;
-      this.gem.rotation.x += 1.6 * dt;
-      this.staffLight.intensity = 2.0 + Math.sin(this.breathCycle * 2) * 0.8;
+    if (this.state === 'FREEFALL' || this.state === 'LANDING') {
+      this.postUpdatePhysics(dt, sceneManager3D, physics3D);
+      return;
     }
 
-    // Robe hem physical wave undulation
-    if (this.skirt) {
-      this.skirt.rotation.z = Math.sin(this.breathCycle * 1.5) * 0.04;
-      this.skirt.scale.set(1 + Math.sin(this.breathCycle) * 0.02, 1, 1 + Math.cos(this.breathCycle) * 0.02);
-    }
+    if (this.state === 'ATTACKING' || this.state === 'ALERT') {
+      const targetX = mouse3D.worldX + (this.squadOffsetX || 0);
+      this.targetX = targetX;
+      const dist = targetX - this.group.position.x;
 
-    // Somatic casting gesture animation
-    if (this.castPhase === 'CHARGE') {
-      this.castTimer -= dt;
-      this.armLData.shoulder.rotation.z = 1.35;
-      this.armLData.elbow.rotation.z = -1.3;
-      this.armLData.shoulder.rotation.y = 0.4;
-      this.chest.rotation.z = -0.2;
-      if (this.castTimer <= 0) {
-        this.castPhase = 'RELEASE';
-        this.castTimer = 0.22;
-      }
-    } else if (this.castPhase === 'RELEASE') {
-      this.castTimer -= dt;
-      this.armLData.shoulder.rotation.z = 0.2;
-      this.armLData.elbow.rotation.z = -0.2;
-      this.armLData.shoulder.rotation.y = -0.3;
-      this.chest.rotation.z = 0.25;
-      if (this.castTimer <= 0) {
-        this.castPhase = 'IDLE';
-      }
-    } else {
-      // Idle somatic hand breathing
-      this.armLData.shoulder.rotation.z += (0.6 + Math.sin(this.breathCycle) * 0.1 - this.armLData.shoulder.rotation.z) * 6 * dt;
-      this.armLData.elbow.rotation.z += (-0.8 + Math.cos(this.breathCycle) * 0.1 - this.armLData.elbow.rotation.z) * 6 * dt;
-      this.chest.rotation.z += (0 - this.chest.rotation.z) * 6 * dt;
-    }
-
-    if (this.state === 'ATTACKING') {
-      const offsetX = this.squadOffsetX !== 0 ? this.squadOffsetX : (mouse3D.worldX < this.group.position.x ? 18 : -18);
-      const desiredX = mouse3D.worldX + offsetX;
-      this.targetX = Math.max(-42, Math.min(42, desiredX));
-      const dist = this.targetX - this.group.position.x;
-      this.group.position.x += dist * 2.2 * dt;
-
-      // Leg articulation beneath robes
-      if (Math.abs(dist) > 0.8) {
-        this.walkCycle += Math.abs(dist) * 0.4 * dt * 6;
-        const gait = this.calculateHumanoidGait(this.walkCycle);
-        this.legLData.hip.rotation.z = gait.legL.hip * 0.8;
-        this.legLData.knee.rotation.z = gait.legL.knee * 0.8;
-        this.legRData.hip.rotation.z = gait.legR.hip * 0.8;
-        this.legRData.knee.rotation.z = gait.legR.knee * 0.8;
-        this.pelvis.rotation.y = gait.swayY;
+      if (Math.abs(dist) > 1.4) {
+        const moveDir = Math.sign(dist);
+        this.group.position.x += moveDir * Math.min(Math.abs(dist), this.moveSpeed * dt);
+        this.playMove(this.moveSpeed);
       } else {
-        this.legLData.hip.rotation.z += (0 - this.legLData.hip.rotation.z) * 6 * dt;
-        this.legLData.knee.rotation.z += (-0.06 - this.legLData.knee.rotation.z) * 6 * dt;
-        this.legRData.hip.rotation.z += (0 - this.legRData.hip.rotation.z) * 6 * dt;
-        this.legRData.knee.rotation.z += (-0.06 - this.legRData.knee.rotation.z) * 6 * dt;
+        this.playIdle();
       }
 
       this.attackCooldown -= dt;
@@ -1052,34 +657,50 @@ class Wizard3D extends Character3DBase {
       this.targetX = targetX;
       const dist = targetX - this.group.position.x;
       if (Math.abs(dist) > 1.2) {
-        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 16 * dt);
-        this.facing = dist >= 0 ? 1 : -1;
+        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 14 * dt);
+        this.playMove(14);
+      } else {
+        this.playIdle();
       }
-      this.group.rotation.y = (this.facing === 1 ? 0 : Math.PI) + Math.sin(this.huntTimer * 3.5) * 0.45;
-      this.headGroup.rotation.y = Math.sin(this.huntTimer * 4.0) * 0.35;
-      if (this.staff) {
-        this.staff.rotation.x = -0.3 + Math.sin(this.huntTimer * 2.8) * 0.35;
-      }
+
+      const patrolAngle = Math.atan2(Math.sign(dist || this.facing) * 10, 4);
+      let diff = patrolAngle - this.group.rotation.y;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      this.group.rotation.y += diff * Math.min(1.0, 6.0 * dt);
+    }
+
+    if (this.orbLight) {
+      this.orbLight.intensity = 1.0 + Math.sin(performance.now() * 0.006) * 0.4;
     }
 
     this.postUpdatePhysics(dt, sceneManager3D, physics3D);
   }
 
   castSpell(mouse3D, physics3D, sceneManager3D) {
-    this.castPhase = 'CHARGE';
-    this.castTimer = 0.15;
+    if (this.anim) {
+      if (this.anim.getAction('Spell1')) {
+        this.anim.playOnce('Spell1', 'Idle_Weapon');
+      } else if (this.anim.getAction('Staff_Attack')) {
+        this.anim.playOnce('Staff_Attack', 'Idle_Weapon');
+      }
+    }
+
+    if (this.orbLight) {
+      this.orbLight.intensity = 4.5;
+    }
 
     const roll = Math.random();
 
     if (roll < 0.45) {
-      window.soundEngine.playMagicMissile();
+      if (window.soundEngine) window.soundEngine.playMagicMissile();
       for (let i = 0; i < 3; i++) {
         const spreadAngle = (i - 1) * 0.35 + (this.facing === 1 ? 0 : Math.PI);
         physics3D.addProjectile3D({
           type: 'magic_missile',
           x: this.group.position.x + this.facing * 2.5,
           y: 7.2,
-          z: 0.8,
+          z: this.group.position.z + 0.8,
           vx: Math.cos(spreadAngle) * 32,
           vy: Math.sin(spreadAngle) * 32 + 10,
           vz: (Math.random() - 0.5) * 8,
@@ -1093,7 +714,7 @@ class Wizard3D extends Character3DBase {
       }
       this.attackCooldown = 0.65;
     } else if (roll < 0.75) {
-      window.soundEngine.playArcaneBeam();
+      if (window.soundEngine) window.soundEngine.playArcaneBeam();
       physics3D.addTrauma(0.35);
       const meteorX = mouse3D.worldX + (Math.random() - 0.5) * 12;
 
@@ -1112,7 +733,7 @@ class Wizard3D extends Character3DBase {
       this.attackCooldown = 1.1;
       if (Math.random() < 0.4) this.say(this.quips[Math.floor(Math.random() * this.quips.length)]);
     } else {
-      window.soundEngine.playLightning();
+      if (window.soundEngine) window.soundEngine.playLightning();
       physics3D.spawnSparks3D(mouse3D.worldX, mouse3D.worldY, mouse3D.worldZ, 25, 0xc084fc);
       physics3D.addTrauma(0.25);
       physics3D.blastRadius3D(mouse3D.worldX, mouse3D.worldY, mouse3D.worldZ, 8, 55, sceneManager3D.props);
@@ -1124,14 +745,12 @@ class Wizard3D extends Character3DBase {
   }
 
   fireUpwardAtCursor(mouse3D, physics3D) {
-    this.castPhase = 'RELEASE';
-    this.castTimer = 0.2;
-    window.soundEngine.playMagicMissile();
+    if (window.soundEngine) window.soundEngine.playMagicMissile();
     physics3D.addProjectile3D({
       type: 'magic_missile',
       x: this.group.position.x,
       y: this.group.position.y + 6.2,
-      z: 0,
+      z: this.group.position.z,
       vx: (mouse3D.worldX - this.group.position.x) * 0.8,
       vy: 45,
       vz: 0,
@@ -1146,372 +765,113 @@ class Wizard3D extends Character3DBase {
 }
 
 // ==========================================
-// 2. SCULPTED SOLDIER 3D (Anatomical Tactical Operator)
+// 2. PRODUCTION 3D SOLDIER (Skinned Military Commando)
 // ==========================================
 class Soldier3D extends Character3DBase {
   constructor(x, y, z, scene) {
     super('Soldier', x, y, z, scene);
+    this.collisionRadius = 1.8;
+    this.moveSpeed = 19;
     this.recoil = 0;
-    this.aimElevation = 0;
+
     this.say("LOCK AND LOAD! LIGHT UP THE GRID!");
     this.quips = [
       "LIGHT IT UP!",
       "WHY WON'T YOU BLEED?!",
       "UNLOAD ALL MAGAZINES!",
-      "DIRECT HIT AND ZERO CASUALTIES?! WTF!",
-      "CALLING IN HEAVY ARTILLERY!"
+      "CALLING IN HIGH-CALIBER SUPPORT!"
     ];
     this.fallQuips = [
-      "STRUCTURAL BREACH! WE'RE GOING DOWN! MAYDAY!",
-      "THE FLOOR GAVE WAY! MAN DOWN!",
-      "FREEFALL COMBAT ENGAGED! FIRE ON TARGET!",
-      "HOLD ONTO YOUR HELMETS!"
+      "STRUCTURAL CAVE-IN! MAYDAY!",
+      "GROUND IS GONE! DEPLOYING CHUTE!",
+      "KEEP FIRING DOWN INTO THE BREACH!"
     ];
     this.huntQuips = [
-      "TARGET OFF-GRID! PERIMETER SEARCH IN EFFECT!",
-      "WHERE IS THAT GLITCH HIDING?!",
-      "SWEEPING SECTORS! IT CANNOT ESCAPE THE SYSTEM!",
-      "EYES ON THE BORDERS! DON'T LET IT FLANK US!"
+      "TARGET BROKE VISUAL CONTACT. SWEEPING PERIMETER.",
+      "CHECKING DEAD ZONES. FLUSH HIM OUT!",
+      "RELOADING AND ADVANCING TO BOUNDARY."
     ];
 
-    this.buildMesh();
+    this.attachGLTFModel('soldier', (model) => {
+      // Find right hand bone and attach tactical carbine
+      const rightHand = model.getObjectByName('mixamorigRightHand');
+      this.buildTacticalRifle(rightHand || this.group);
+    });
   }
 
-  buildMesh() {
-    const camoTex = TextureGen.createFabricTexture('#14532d');
-    const vestTex = TextureGen.createFabricTexture('#0f172a');
-    const bootTex = TextureGen.createLeatherTexture('#0f172a');
+  buildTacticalRifle(parentBone) {
+    this.rifleGroup = new THREE.Group();
+    // Offset and align rifle with right grip
+    this.rifleGroup.position.set(0.12, 0.22, 0.15);
+    this.rifleGroup.rotation.set(-Math.PI * 0.45, 0, Math.PI * 0.5);
 
-    const camoMat = new THREE.MeshStandardMaterial({
-      map: camoTex,
-      bumpMap: camoTex,
-      bumpScale: 0.05,
-      roughness: 0.72
-    });
-    const vestMat = new THREE.MeshStandardMaterial({
-      map: vestTex,
-      bumpMap: vestTex,
-      bumpScale: 0.06,
-      roughness: 0.65,
-      metalness: 0.15
-    });
-    const bootMat = new THREE.MeshStandardMaterial({
-      map: bootTex,
-      roughness: 0.45,
-      metalness: 0.1
-    });
-    const padMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.35, metalness: 0.25 });
-    const gloveMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.5 });
-    const gunMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.88, roughness: 0.2 });
-
-    // 1. Pelvis Center & Tactical Battle Belt
-    this.pelvis = new THREE.Group();
-    this.pelvis.position.y = 3.65;
-    this.group.add(this.pelvis);
-
-    const beltGeom = new THREE.CylinderGeometry(0.95, 0.9, 0.4, 14);
-    const belt = new THREE.Mesh(beltGeom, vestMat);
-    this.pelvis.add(belt);
-
-    // Cobra Buckle on Belt
-    const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.22, 0.32), new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.9, roughness: 0.2 }));
-    buckle.position.set(0.95, 0, 0);
-    this.pelvis.add(buckle);
-
-    // Tactical Holster on Right Thigh & Dump Pouch on Left
-    const holster = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.75, 0.3), padMat);
-    holster.position.set(0.1, -0.4, -0.9);
-    this.pelvis.add(holster);
-
-    const dumpPouch = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.6, 0.4), vestMat);
-    dumpPouch.position.set(-0.2, -0.3, 0.95);
-    this.pelvis.add(dumpPouch);
-
-    // 2. Articulated 2-Segment Legs (Knee Patella Hinge & Ankle)
-    this.legLData = this.buildArticulatedLeg(camoMat, padMat, camoMat, bootMat, 1);
-    this.pelvis.add(this.legLData.hip);
-    this.legL = this.legLData.hip; // backwards compat
-
-    this.legRData = this.buildArticulatedLeg(camoMat, padMat, camoMat, bootMat, -1);
-    this.pelvis.add(this.legRData.hip);
-    this.legR = this.legRData.hip; // backwards compat
-
-    // 3. Spine & Articulated Torso
-    this.spine = new THREE.Group();
-    this.pelvis.add(this.spine);
-
-    const midriff = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.92, 0.8, 14), camoMat);
-    midriff.position.y = 0.5;
-    this.spine.add(midriff);
-
-    // Plate Carrier Chest Rig
-    this.chest = new THREE.Group();
-    this.chest.position.y = 1.0;
-    this.spine.add(this.chest);
-
-    // Sculpted Athletic Human Torso (LatheGeometry with broad pectorals, tapered waist, obliques)
-    const torsoPts = [
-      [0, 1.35],
-      [0.72, 1.3],
-      [1.15, 1.05],
-      [1.24, 0.65],
-      [1.10, 0.25],
-      [0.94, -0.2],
-      [0.98, -0.65],
-      [0, -0.75]
-    ].map(p => new THREE.Vector2(p[0], p[1]));
-    const torsoGeom = new THREE.LatheGeometry(torsoPts, 18);
-    torsoGeom.computeVertexNormals();
-
-    const chestRig = new THREE.Mesh(torsoGeom, vestMat);
-    chestRig.position.y = 0.55;
-    chestRig.scale.set(1.0, 1.0, 0.88);
-    chestRig.castShadow = true;
-    this.chest.add(chestRig);
-
-    // Contoured Front Ceramic Strike Plate (curves to match torso)
-    const frontPlateGeom = new THREE.CylinderGeometry(0.72, 0.78, 1.15, 14, 1, false, -Math.PI / 3, Math.PI * 0.66);
-    const frontPlate = new THREE.Mesh(frontPlateGeom, vestMat);
-    frontPlate.rotation.y = -Math.PI / 2;
-    frontPlate.position.set(0.65, 0.55, 0);
-    this.chest.add(frontPlate);
-
-    // 3 M4 Magazine Pouches on Front Webbing
-    for (let p = -1; p <= 1; p++) {
-      const magPouch = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.72, 0.35), vestMat);
-      magPouch.position.set(0.85, 0.45, p * 0.42);
-      this.chest.add(magPouch);
-    }
-
-    // IFAK Trauma Pouch & PTT Radio on Shoulder
-    const ifak = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.55, 0.42), vestMat);
-    ifak.position.set(-0.2, 0.5, 0.92);
-    this.chest.add(ifak);
-
-    const radio = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.65, 0.3), padMat);
-    radio.position.set(-0.6, 0.9, -0.7);
-    this.chest.add(radio);
-
-    const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.8), padMat);
-    antenna.position.set(-0.6, 1.9, -0.7);
-    antenna.rotation.z = -0.15;
-    this.chest.add(antenna);
-
-    // 4. Anatomically Sculpted Head & Tactical Helmet
-    const headData = this.buildSculptedHead('soldier', 'tan', 0x15803d);
-    this.headGroup = headData.headGroup;
-    this.headGroup.position.set(0.05, 1.85, 0);
-    this.chest.add(this.headGroup);
-
-    // High-Cut FAST Ballistic Helmet
-    const helmetGeom = new THREE.SphereGeometry(0.88, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.58);
-    const helmet = new THREE.Mesh(helmetGeom, camoMat);
-    helmet.position.set(-0.02, 0.12, 0);
-    helmet.castShadow = true;
-    this.headGroup.add(helmet);
-
-    // Wilcox NVG Shroud on Helmet Front
-    const nvgShroud = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.28, 0.28), padMat);
-    nvgShroud.position.set(0.78, 0.25, 0);
-    this.headGroup.add(nvgShroud);
-
-    // Side ARC Rails & Velcro Patches
-    for (const z of [0.82, -0.82]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.12, 0.08), padMat);
-      rail.position.set(0.05, 0.15, z);
-      this.headGroup.add(rail);
-    }
-
-    // Comms Headset (Earcups over ears + boom mic)
-    for (const z of [0.85, -0.85]) {
-      const earcup = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.15, 10), padMat);
-      earcup.rotation.x = Math.PI / 2;
-      earcup.position.set(-0.05, 0.02, z);
-      this.headGroup.add(earcup);
-    }
-    const boomMic = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.65), padMat);
-    boomMic.position.set(0.35, -0.22, 0.65);
-    boomMic.rotation.z = Math.PI / 3;
-    this.headGroup.add(boomMic);
-
-    // Tactical Ballistic Eye Protection (ESS Goggles on Helmet Brim)
-    const goggleFrame = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 1.1), padMat);
-    goggleFrame.position.set(0.72, 0.42, 0);
-    this.headGroup.add(goggleFrame);
-    const goggleLens = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.98), new THREE.MeshStandardMaterial({
-      color: 0x0284c7,
+    const gunMat = new THREE.MeshStandardMaterial({
+      color: 0x1e293b,
       metalness: 0.9,
-      roughness: 0.1,
-      transparent: true,
-      opacity: 0.85
-    }));
-    goggleLens.position.set(0.82, 0.42, 0);
-    this.headGroup.add(goggleLens);
+      roughness: 0.28
+    });
+    const gripMat = new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      roughness: 0.7
+    });
 
-    // 5. Articulated Arms & Two-Handed Tactical Rifle Platform
-    this.armRData = this.buildArticulatedArm(camoMat, padMat, camoMat, gloveMat, -1);
-    this.armRData.shoulder.position.set(-0.15, 1.1, -0.88);
-    this.chest.add(this.armRData.shoulder);
+    // Receiver chassis
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.28, 1.1), gunMat);
+    this.rifleGroup.add(body);
 
-    this.armLData = this.buildArticulatedArm(camoMat, padMat, camoMat, gloveMat, 1);
-    this.armLData.shoulder.position.set(0.12, 1.1, 0.88);
-    this.chest.add(this.armLData.shoulder);
+    // Fluted heavy barrel
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.9, 10), gunMat);
+    barrel.rotation.x = Math.PI * 0.5;
+    barrel.position.set(0, 0.04, 0.85);
+    this.rifleGroup.add(barrel);
 
-    // Rig arms into tactical shooting stance
-    // Right arm (trigger hand): shoulder angles forward, elbow bends snugly
-    this.armRData.shoulder.rotation.set(-0.25, 0.2, 0.75);
-    this.armRData.elbow.rotation.set(0, 0, -0.85);
+    // Muzzle brake
+    const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.06, 0.2, 10), gunMat);
+    muzzle.rotation.x = Math.PI * 0.5;
+    muzzle.position.set(0, 0.04, 1.35);
+    this.rifleGroup.add(muzzle);
 
-    // Left arm (support hand): reaches across chest toward handguard in C-clamp grip
-    this.armLData.shoulder.rotation.set(0.35, -0.25, 0.95);
-    this.armLData.elbow.rotation.set(0, 0, -1.25);
+    // Holographic optical sight
+    const sight = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.16, 0.35), gunMat);
+    sight.position.set(0, 0.22, 0.05);
+    this.rifleGroup.add(sight);
 
-    // 6. Detailed M4A1 Assault Rifle with EOTech Optic & PEQ Box
-    this.rifle = new THREE.Group();
-    this.baseRifleX = 0.55;
-    this.rifle.position.set(this.baseRifleX, 0.85, 0.15);
+    // Curved magazine
+    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.45, 0.26), gripMat);
+    mag.position.set(0, -0.28, 0.2);
+    mag.rotation.x = -0.25;
+    this.rifleGroup.add(mag);
 
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.55, 0.35), gunMat);
-    receiver.position.set(0.4, 0, 0);
-    this.rifle.add(receiver);
+    // Muzzle flash dynamic light
+    this.muzzleLight = new THREE.PointLight(0xf59e0b, 0, 16);
+    this.muzzleLight.position.set(0, 0.04, 1.55);
+    this.rifleGroup.add(this.muzzleLight);
 
-    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.52, 1.25, 0.28), gunMat);
-    mag.position.set(0.55, -0.65, 0);
-    mag.rotation.z = 0.22;
-    this.rifle.add(mag);
-
-    const pistolGrip = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.85, 0.28), padMat);
-    pistolGrip.position.set(-0.25, -0.55, 0);
-    pistolGrip.rotation.z = -0.35;
-    this.rifle.add(pistolGrip);
-
-    const handguard = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.48, 0.38), gunMat);
-    handguard.position.set(2.2, 0, 0);
-    this.rifle.add(handguard);
-
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.4), gunMat);
-    barrel.rotation.z = Math.PI / 2;
-    barrel.position.set(3.6, 0, 0);
-    this.rifle.add(barrel);
-
-    const flashHider = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.45), gunMat);
-    flashHider.rotation.z = Math.PI / 2;
-    flashHider.position.set(4.35, 0, 0);
-    this.rifle.add(flashHider);
-
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.65, 0.28), padMat);
-    stock.position.set(-1.1, -0.05, 0);
-    this.rifle.add(stock);
-
-    // Holographic Sight (EOTech) with illuminated reticle lens
-    const holoSight = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.42, 0.32), gunMat);
-    holoSight.position.set(0.5, 0.48, 0);
-    this.rifle.add(holoSight);
-
-    const holoReticle = new THREE.Mesh(new THREE.CircleGeometry(0.12, 8), new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide }));
-    holoReticle.rotation.y = Math.PI / 2;
-    holoReticle.position.set(0.86, 0.5, 0);
-    this.rifle.add(holoReticle);
-
-    // Top-Rail PEQ-15 Laser Unit
-    const peq = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.22, 0.32), padMat);
-    peq.position.set(2.0, 0.35, 0);
-    this.rifle.add(peq);
-
-    this.rifle.castShadow = true;
-    this.chest.add(this.rifle);
-
-    // Dynamic Muzzle Light
-    this.muzzleLight = new THREE.PointLight(0xfbbf24, 0, 16);
-    this.muzzleLight.position.set(4.5, 0, 0);
-    this.rifle.add(this.muzzleLight);
-  }
-
-  onStartFreefall() {
-    this.say(this.fallQuips[Math.floor(Math.random() * this.fallQuips.length)], 3.0);
-  }
-
-  onLandImpact() {
-    this.say("COMBAT LANDING CONFIRMED! RESUMING PURSUIT!", 2.2);
-  }
-
-  onStartHunting(lastExitPos) {
-    this.say(this.huntQuips[0]);
-    window.soundEngine.playSonarPing();
-    this.huntPatrolTargetX = lastExitPos ? Math.max(-42, Math.min(42, (lastExitPos.x / window.innerWidth) * 88 - 44)) : (this.facing * 36);
-  }
-
-  onSpotCursor() {
-    this.say("CONTACT! TARGET RE-ACQUIRED! FIRE!");
-    window.soundEngine.playAlert();
+    parentBone.add(this.rifleGroup);
   }
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
     this.updateCommon(dt, mouse3D, physics3D, sceneManager3D);
-
-    // Recoil recovery
-    if (this.recoil > 0) {
-      this.recoil = Math.max(0, this.recoil - 14 * dt);
-      this.rifle.position.x = this.baseRifleX - this.recoil * 0.35;
-      this.armRData.shoulder.rotation.z = 0.75 + this.recoil * 0.18;
-      this.chest.rotation.z = -this.recoil * 0.1;
-    } else {
-      this.rifle.position.x = this.baseRifleX;
-      this.armRData.shoulder.rotation.z = 0.75;
-      this.chest.rotation.z = 0;
+    if (this.state === 'FREEFALL' || this.state === 'LANDING') {
+      this.postUpdatePhysics(dt, sceneManager3D, physics3D);
+      return;
     }
 
-    if (this.muzzleLight.intensity > 0) {
-      this.muzzleLight.intensity = Math.max(0, this.muzzleLight.intensity - 24 * dt);
+    if (this.muzzleLight && this.muzzleLight.intensity > 0) {
+      this.muzzleLight.intensity = Math.max(0, this.muzzleLight.intensity - dt * 30);
     }
 
-    if (this.state === 'ATTACKING') {
-      const offsetX = this.squadOffsetX !== 0 ? this.squadOffsetX : (mouse3D.worldX > this.group.position.x ? -18 : 18);
-      const desiredX = mouse3D.worldX + offsetX;
-      this.targetX = Math.max(-42, Math.min(42, desiredX));
-      const dist = this.targetX - this.group.position.x;
-      this.group.position.x += dist * 2.8 * dt;
+    if (this.state === 'ATTACKING' || this.state === 'ALERT') {
+      const targetX = mouse3D.worldX + (this.squadOffsetX || 0);
+      this.targetX = targetX;
+      const dist = targetX - this.group.position.x;
 
-      // Biomechanical locomotion
-      const isMoving = Math.abs(dist) > 0.8;
-      if (isMoving) {
-        this.walkCycle += Math.abs(dist) * 0.45 * dt * 8;
-        const gait = this.calculateHumanoidGait(this.walkCycle);
-
-        this.legLData.hip.rotation.z = gait.legL.hip;
-        this.legLData.knee.rotation.z = gait.legL.knee;
-        this.legLData.ankle.rotation.z = gait.legL.ankle;
-
-        this.legRData.hip.rotation.z = gait.legR.hip;
-        this.legRData.knee.rotation.z = gait.legR.knee;
-        this.legRData.ankle.rotation.z = gait.legR.ankle;
-
-        this.pelvis.position.y = 3.65 + gait.bounceY;
-        this.pelvis.rotation.y = gait.swayY;
-        this.pelvis.rotation.z = gait.rollZ;
-        this.spine.rotation.y = gait.torsoTwistY;
+      if (Math.abs(dist) > 2.0) {
+        const moveDir = Math.sign(dist);
+        this.group.position.x += moveDir * Math.min(Math.abs(dist), this.moveSpeed * dt);
+        this.playMove(this.moveSpeed);
       } else {
-        // Natural tactical stance with breathing
-        this.legLData.hip.rotation.z += (0 - this.legLData.hip.rotation.z) * 8 * dt;
-        this.legLData.knee.rotation.z += (-0.06 - this.legLData.knee.rotation.z) * 8 * dt;
-        this.legLData.ankle.rotation.z += (0 - this.legLData.ankle.rotation.z) * 8 * dt;
-
-        this.legRData.hip.rotation.z += (0 - this.legRData.hip.rotation.z) * 8 * dt;
-        this.legRData.knee.rotation.z += (-0.06 - this.legRData.knee.rotation.z) * 8 * dt;
-        this.legRData.ankle.rotation.z += (0 - this.legRData.ankle.rotation.z) * 8 * dt;
-
-        this.pelvis.position.y = 3.65 + Math.sin(this.breathCycle) * 0.06;
-        this.spine.rotation.y = 0;
-      }
-
-      // Tactical weapon tracking / aim elevation toward cursor
-      if (mouse3D.active) {
-        const dy = mouse3D.worldY - (this.group.position.y + 4.5);
-        const dx = Math.abs(mouse3D.worldX - this.group.position.x) || 1;
-        const targetAimAngle = Math.atan2(dy, dx);
-        this.aimElevation += (targetAimAngle - this.aimElevation) * 10 * dt;
-        this.rifle.rotation.z = THREE.MathUtils.clamp(this.aimElevation, -0.55, 0.65);
-        this.headGroup.rotation.z = THREE.MathUtils.clamp(this.aimElevation * 0.4, -0.3, 0.4);
+        this.playIdle();
       }
 
       this.attackCooldown -= dt;
@@ -1522,34 +882,18 @@ class Soldier3D extends Character3DBase {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
       this.targetX = targetX;
       const dist = targetX - this.group.position.x;
-      if (Math.abs(dist) > 1.5) {
-        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 18 * dt);
-        this.walkCycle += 18 * dt * 0.45;
-        const gait = this.calculateHumanoidGait(this.walkCycle);
-
-        this.legLData.hip.rotation.z = gait.legL.hip;
-        this.legLData.knee.rotation.z = gait.legL.knee;
-        this.legLData.ankle.rotation.z = gait.legL.ankle;
-
-        this.legRData.hip.rotation.z = gait.legR.hip;
-        this.legRData.knee.rotation.z = gait.legR.knee;
-        this.legRData.ankle.rotation.z = gait.legR.ankle;
-
-        this.pelvis.position.y = 3.65 + gait.bounceY;
-        this.pelvis.rotation.y = gait.swayY;
-        this.facing = dist >= 0 ? 1 : -1;
+      if (Math.abs(dist) > 1.2) {
+        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 15 * dt);
+        this.playMove(15);
       } else {
-        this.legLData.hip.rotation.z = 0;
-        this.legLData.knee.rotation.z = -0.06;
-        this.legRData.hip.rotation.z = 0;
-        this.legRData.knee.rotation.z = -0.06;
-        this.pelvis.position.y = 3.65 + Math.sin(this.breathCycle) * 0.05;
+        this.playIdle();
       }
 
-      // Tactical head scanning while hunting
-      this.group.rotation.y = (this.facing === 1 ? 0 : Math.PI) + Math.sin(this.huntTimer * 3.5) * 0.45;
-      this.headGroup.rotation.y = Math.sin(this.huntTimer * 4.2) * 0.35;
-      this.rifle.rotation.z = Math.sin(this.huntTimer * 2.5) * 0.15;
+      const patrolAngle = Math.atan2(Math.sign(dist || this.facing) * 10, 4);
+      let diff = patrolAngle - this.group.rotation.y;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      this.group.rotation.y += diff * Math.min(1.0, 7.0 * dt);
     }
 
     this.postUpdatePhysics(dt, sceneManager3D, physics3D);
@@ -1558,19 +902,22 @@ class Soldier3D extends Character3DBase {
   fireArsenal(mouse3D, physics3D, sceneManager3D) {
     const roll = Math.random();
 
-    if (roll < 0.65) {
-      this.recoil = 1.0;
-      this.muzzleLight.intensity = 4.0;
-      window.soundEngine.playGunshot(false);
-
-      const barrelWorld = new THREE.Vector3();
+    const barrelWorld = new THREE.Vector3();
+    if (this.muzzleLight) {
       this.muzzleLight.getWorldPosition(barrelWorld);
+    } else {
+      barrelWorld.set(this.group.position.x + this.facing * 2.2, 5.2, this.group.position.z);
+    }
+
+    if (roll < 0.65) {
+      if (this.muzzleLight) this.muzzleLight.intensity = 5.0;
+      if (window.soundEngine) window.soundEngine.playGunshot(false);
 
       const dx = mouse3D.worldX - barrelWorld.x;
       const dy = mouse3D.worldY - barrelWorld.y;
       const dz = mouse3D.worldZ - barrelWorld.z;
       const len = Math.hypot(dx, dy, dz) || 1;
-      const spd = 130;
+      const spd = 135;
 
       physics3D.addProjectile3D({
         type: 'bullet',
@@ -1589,13 +936,13 @@ class Soldier3D extends Character3DBase {
         sceneManager3D.damageFloorAt(mouse3D.worldX, 3.5, 15, physics3D);
       }
     } else if (roll < 0.85) {
-      window.soundEngine.playJavelinThrow();
+      if (window.soundEngine) window.soundEngine.playJavelinThrow();
       const throwAngle = this.facing === 1 ? Math.PI * 0.25 : Math.PI * 0.75;
       physics3D.addProjectile3D({
         type: 'grenade',
         x: this.group.position.x + this.facing * 2.0,
         y: 5.2,
-        z: 0.5,
+        z: this.group.position.z + 0.5,
         vx: Math.cos(throwAngle) * 35 + (mouse3D.worldX - this.group.position.x) * 0.4,
         vy: 28,
         vz: 0,
@@ -1604,12 +951,8 @@ class Soldier3D extends Character3DBase {
       this.say("FRAG OUT!");
       this.attackCooldown = 1.0;
     } else {
-      this.recoil = 2.2;
-      this.muzzleLight.intensity = 6.0;
-      window.soundEngine.playGunshot(true);
-
-      const barrelWorld = new THREE.Vector3();
-      this.muzzleLight.getWorldPosition(barrelWorld);
+      if (this.muzzleLight) this.muzzleLight.intensity = 8.0;
+      if (window.soundEngine) window.soundEngine.playGunshot(true);
 
       const dx = mouse3D.worldX - barrelWorld.x;
       const dy = mouse3D.worldY - barrelWorld.y;
@@ -1634,14 +977,13 @@ class Soldier3D extends Character3DBase {
   }
 
   fireUpwardAtCursor(mouse3D, physics3D) {
-    this.recoil = 1.5;
-    this.muzzleLight.intensity = 3.5;
-    window.soundEngine.playGunshot(false);
+    if (this.muzzleLight) this.muzzleLight.intensity = 4.0;
+    if (window.soundEngine) window.soundEngine.playGunshot(false);
     physics3D.addProjectile3D({
       type: 'bullet',
       x: this.group.position.x,
       y: 6.2,
-      z: 0,
+      z: this.group.position.z,
       vx: (mouse3D.worldX - this.group.position.x) * 1.5,
       vy: 100,
       vz: 0,
@@ -1652,412 +994,128 @@ class Soldier3D extends Character3DBase {
 }
 
 // ==========================================
-// 3. SCULPTED KNIGHT 3D (Gothic Plate Armor Champion)
+// 3. PRODUCTION 3D KNIGHT (Skinned Gothic Plate Warrior)
 // ==========================================
 class Knight3D extends Character3DBase {
   constructor(x, y, z, scene) {
     super('Knight', x, y, z, scene);
-    this.slashPhase = 'IDLE';
-    this.slashTimer = 0;
+    this.collisionRadius = 1.9;
+    this.moveSpeed = 17;
+
     this.say("BY STEEL AND STONE, THOU SHALT BE CRUSHED!");
     this.quips = [
       "FACE MY STEEL, COWARD!",
       "I WILL CLEAVE THY DEMONIC CORE!",
-      "STAND THY GROUND AND FIGHT ME!",
-      "THE EARTH ITSELF TREMBLES AT MY CHARGE!"
+      "NO CURSOR CAN SHIELD FROM VALOR!",
+      "THOU ART NOTHING BEFORE CHIVALRY!"
     ];
     this.fallQuips = [
-      "THE ABYSS HATH CLAIMED THE FLOOR!",
-      "BRACE THY ARMOR! WE PLUNGE INTO CHAOS!",
-      "MY BLADE WILL STRIKE THEE AS WE FALL!"
+      "MY ARMOR IS TOO HEAVY! THE KEEP CRUMBLES!",
+      "DOWNWARD INTO PERDITION!",
+      "I SHALL CLEAVE THE VERY ABYSS!"
     ];
     this.huntQuips = [
-      "COME FORTH, PHANTOM! THOU CANST NOT HIDE FOREVER!",
-      "THOU LURKEST BEYOND THE GATES OF VISION!",
-      "STAND AND FIGHT, CRAVEN WHELP!",
-      "I SHALT NOT REST UNTIL THOU ART CLEFT IN TWAIN!"
+      "COME FORTH AND DUEL LIKE A MAN!",
+      "THOU CANST NOT HIDE FOREVER IN THE SHADOWS!",
+      "I HEAR THY FOOTFALLS BEYOND THE PERIMETER!"
     ];
 
-    this.buildMesh();
+    this.attachGLTFModel('knight', (model) => {
+      // Find greatsword and attach enchanted blade glow light
+      const swordMesh = model.getObjectByName('Warrior_Sword');
+      this.bladeLight = new THREE.PointLight(0x38bdf8, 1.0, 10);
+      this.bladeLight.position.set(0, 0.4, 0);
+
+      const weaponBone = model.getObjectByName('WeaponR');
+      if (weaponBone) {
+        weaponBone.add(this.bladeLight);
+      } else if (swordMesh) {
+        swordMesh.add(this.bladeLight);
+      } else {
+        this.group.add(this.bladeLight);
+      }
+    });
   }
 
-  buildMesh() {
-    const metalTex = TextureGen.createMetalTexture();
-    const mailTex = TextureGen.createChainmailTexture();
-    const capeTex = TextureGen.createFabricTexture('#991b1b');
-    const leatherTex = TextureGen.createLeatherTexture('#2e1065');
-
-    // Burnished Gothic Steel Material
-    const steelMat = new THREE.MeshStandardMaterial({
-      map: metalTex,
-      bumpMap: metalTex,
-      bumpScale: 0.08,
-      metalness: 0.95,
-      roughness: 0.16
-    });
-
-    // Riveted Chainmail Material
-    const mailMat = new THREE.MeshStandardMaterial({
-      map: mailTex,
-      bumpMap: mailTex,
-      bumpScale: 0.06,
-      metalness: 0.85,
-      roughness: 0.5
-    });
-
-    const goldMat = new THREE.MeshStandardMaterial({
-      color: 0xd97706,
-      metalness: 0.92,
-      roughness: 0.22
-    });
-
-    const capeMat = new THREE.MeshStandardMaterial({
-      map: capeTex,
-      bumpMap: capeTex,
-      bumpScale: 0.05,
-      side: THREE.DoubleSide,
-      roughness: 0.65
-    });
-
-    const leatherMat = new THREE.MeshStandardMaterial({
-      map: leatherTex,
-      roughness: 0.6,
-      metalness: 0.1
-    });
-
-    // 1. Pelvis Center & Articulated Faulds / Mail Skirt
-    this.pelvis = new THREE.Group();
-    this.pelvis.position.y = 3.65;
-    this.group.add(this.pelvis);
-
-    // Chainmail Hauberk Skirt underlayer
-    const mailSkirt = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.25, 1.1, 14, 1, true), mailMat);
-    mailSkirt.position.y = -0.2;
-    this.pelvis.add(mailSkirt);
-
-    // Fluted Steel Fauld Lames & Tassets
-    const faulds = new THREE.Mesh(new THREE.CylinderGeometry(1.12, 1.32, 0.75, 16, 1, true), steelMat);
-    faulds.position.y = 0.05;
-    this.pelvis.add(faulds);
-
-    // 2. Articulated 2-Segment Legs (Gothic Cuisses, Poleyns & Sabatons)
-    this.legLData = this.buildArticulatedLeg(steelMat, steelMat, steelMat, steelMat, 1);
-    this.pelvis.add(this.legLData.hip);
-    this.legL = this.legLData.hip; // backwards compat
-
-    this.legRData = this.buildArticulatedLeg(steelMat, steelMat, steelMat, steelMat, -1);
-    this.pelvis.add(this.legRData.hip);
-    this.legR = this.legRData.hip; // backwards compat
-
-    // Spiked Poleyn Knee Wings
-    for (const legData of [this.legLData, this.legRData]) {
-      const poleynWing = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, 0.55), steelMat);
-      poleynWing.position.set(0.18, 0, 0);
-      legData.knee.add(poleynWing);
+  playIdle() {
+    if (!this.anim) return;
+    if (this.anim.getAction('Idle_Weapon')) {
+      this.anim.play('Idle_Weapon');
+    } else {
+      this.anim.play('Idle');
     }
-
-    // 3. Spine & Fluted Peascod Cuirass Breastplate
-    this.spine = new THREE.Group();
-    this.pelvis.add(this.spine);
-
-    const waistPlate = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.08, 0.85, 14), steelMat);
-    waistPlate.position.y = 0.55;
-    this.spine.add(waistPlate);
-
-    this.chest = new THREE.Group();
-    this.chest.position.y = 1.05;
-    this.spine.add(this.chest);
-
-    // Fluted Gothic Peascod Cuirass (anatomical curved breastplate with central deflection keel)
-    const cuirassPts = [
-      [0, 1.35],
-      [0.85, 1.3],
-      [1.3, 1.05],
-      [1.4, 0.65],
-      [1.2, 0.25],
-      [1.02, -0.2],
-      [1.08, -0.65],
-      [0, -0.75]
-    ].map(p => new THREE.Vector2(p[0], p[1]));
-    const cuirassGeom = new THREE.LatheGeometry(cuirassPts, 18);
-    cuirassGeom.computeVertexNormals();
-
-    const cuirass = new THREE.Mesh(cuirassGeom, steelMat);
-    cuirass.position.y = 0.55;
-    cuirass.scale.set(1.05, 1.0, 0.9);
-    cuirass.castShadow = true;
-    this.chest.add(cuirass);
-
-    const ridge = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.6, 0.35), goldMat);
-    ridge.position.set(0.95, 0.65, 0);
-    this.chest.add(ridge);
-
-    // Steel Gorget Throat Armor
-    const gorget = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.22, 8, 14), steelMat);
-    gorget.rotation.x = Math.PI / 2;
-    gorget.position.set(0, 1.6, 0);
-    this.chest.add(gorget);
-
-    // Fluted Grand Pauldrons with Besagew Roundels
-    for (const z of [1.3, -1.3]) {
-      const pauldron = new THREE.Mesh(new THREE.SphereGeometry(0.75, 14, 14, 0, Math.PI), steelMat);
-      pauldron.position.set(-0.1, 1.45, z);
-      pauldron.rotation.z = z > 0 ? 0.35 : -0.35;
-      pauldron.rotation.y = z > 0 ? Math.PI / 2 : -Math.PI / 2;
-      this.chest.add(pauldron);
-
-      const besagew = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.08, 10), goldMat);
-      besagew.rotation.z = Math.PI / 2;
-      besagew.position.set(0.45, 1.25, z * 0.9);
-      this.chest.add(besagew);
-    }
-
-    // Heraldic Crimson Mantle / Cape with Dynamic Flutter
-    this.cape = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 5.2, 8, 8), capeMat);
-    this.cape.position.set(-0.85, 1.1, 0);
-    this.cape.rotation.y = Math.PI / 2;
-    this.cape.castShadow = true;
-    this.chest.add(this.cape);
-
-    // 4. Head, Chainmail Coif & Gothic Sallet Helmet
-    const headData = this.buildSculptedHead('knight', 'fair', 0x2563eb);
-    this.headGroup = headData.headGroup;
-    this.headGroup.position.set(0.05, 2.05, 0);
-    this.chest.add(this.headGroup);
-
-    // Chainmail Coif Hood
-    const coif = new THREE.Mesh(new THREE.SphereGeometry(0.86, 16, 16), mailMat);
-    coif.position.set(0, 0, 0);
-    this.headGroup.add(coif);
-
-    // Gothic Sallet Helmet with Skull Comb & Bevor Chin Guard
-    const sallet = new THREE.Mesh(new THREE.SphereGeometry(0.98, 18, 18, 0, Math.PI * 2, 0, Math.PI * 0.65), steelMat);
-    sallet.position.set(-0.05, 0.15, 0);
-    sallet.castShadow = true;
-    this.headGroup.add(sallet);
-
-    // Raised Central Skull Comb
-    const comb = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.32, 0.14), steelMat);
-    comb.position.set(-0.1, 0.95, 0);
-    comb.rotation.z = -0.15;
-    this.headGroup.add(comb);
-
-    // Bevor Chin Guard
-    const bevor = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.62, 0.65, 12, 1, false, 0, Math.PI), steelMat);
-    bevor.position.set(0.25, -0.42, 0);
-    bevor.rotation.y = -Math.PI / 2;
-    this.headGroup.add(bevor);
-
-    // Glowing Visor Ocular Eye Slit with Piercing Battle Glare
-    const visorRim = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.18, 1.1), steelMat);
-    visorRim.position.set(0.82, 0.12, 0);
-    this.headGroup.add(visorRim);
-
-    const eyeGlow = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.9), new THREE.MeshBasicMaterial({ color: 0x60a5fa }));
-    eyeGlow.position.set(0.92, 0.12, 0);
-    this.headGroup.add(eyeGlow);
-
-    // 5. Articulated Arms & Two-Handed Zweihänder Greatsword
-    this.armRData = this.buildArticulatedArm(steelMat, steelMat, steelMat, steelMat, -1);
-    this.armRData.shoulder.position.set(-0.1, 1.3, -1.05);
-    this.chest.add(this.armRData.shoulder);
-
-    this.armLData = this.buildArticulatedArm(steelMat, steelMat, steelMat, steelMat, 1);
-    this.armLData.shoulder.position.set(0.15, 1.3, 1.05);
-    this.chest.add(this.armLData.shoulder);
-
-    // Greatsword Group
-    this.sword = new THREE.Group();
-    this.baseSwordPos = new THREE.Vector3(1.5, 0.9, 0.2);
-    this.sword.position.copy(this.baseSwordPos);
-
-    // Fluted Double-Edged Blade with Fuller
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.55, 6.8, 0.12), steelMat);
-    blade.position.y = 3.4;
-    blade.castShadow = true;
-    this.sword.add(blade);
-
-    const fuller = new THREE.Mesh(new THREE.BoxGeometry(0.12, 5.2, 0.15), goldMat);
-    fuller.position.y = 3.0;
-    this.sword.add(fuller);
-
-    // Crossguard with Side Rings
-    const crossguard = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.35, 0.35), goldMat);
-    this.sword.add(crossguard);
-
-    for (const z of [0.65, -0.65]) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.08, 6, 10), goldMat);
-      ring.position.set(0, 0, z);
-      this.sword.add(ring);
-    }
-
-    // Long Two-Handed Leather Hilt & Scent-Stopper Pommel
-    const hilt = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.15, 1.9, 10), leatherMat);
-    hilt.position.y = -0.95;
-    this.sword.add(hilt);
-
-    const pommel = new THREE.Mesh(new THREE.OctahedronGeometry(0.35), steelMat);
-    pommel.position.y = -1.95;
-    this.sword.add(pommel);
-
-    // Two-handed combat grip alignment:
-    this.sword.rotation.z = -0.35;
-    this.sword.rotation.x = 0.15;
-    this.chest.add(this.sword);
-
-    // Align arms to grip the greatsword hilt in authentic Vom Tag / Ox Guard
-    this.armRData.shoulder.rotation.set(-0.25, 0.25, 0.85);
-    this.armRData.elbow.rotation.set(0, 0, -0.95);
-
-    this.armLData.shoulder.rotation.set(0.3, -0.2, 0.9);
-    this.armLData.elbow.rotation.set(0, 0, -1.2);
-  }
-
-  onStartFreefall() {
-    this.say(this.fallQuips[Math.floor(Math.random() * this.fallQuips.length)], 3.0);
-  }
-
-  onLandImpact() {
-    this.say("A WARRIOR BOWS TO NO CHASM! DRAW STEEL!", 2.2);
-  }
-
-  onStartHunting(lastExitPos) {
-    this.say(this.huntQuips[0]);
-    window.soundEngine.playArmorClang();
-    this.huntPatrolTargetX = lastExitPos ? Math.max(-42, Math.min(42, (lastExitPos.x / window.innerWidth) * 88 - 44)) : (this.facing * 36);
-  }
-
-  onSpotCursor() {
-    this.say("THOU HAST RETURNED! PREPARE THYSELF!");
-    window.soundEngine.playAlert();
   }
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
     this.updateCommon(dt, mouse3D, physics3D, sceneManager3D);
-
-    // Dynamic heraldic cape flutter
-    if (this.cape) {
-      this.cape.rotation.x = this.state === 'FREEFALL' ? Math.PI * 0.8 : Math.sin(Date.now() * 0.007) * 0.28;
+    if (this.state === 'FREEFALL' || this.state === 'LANDING') {
+      this.postUpdatePhysics(dt, sceneManager3D, physics3D);
+      return;
     }
 
-    // Slash animation state machine
-    if (this.slashPhase === 'WINDUP') {
-      this.slashTimer -= dt;
-      this.sword.rotation.z = 0.9;
-      this.chest.rotation.z = -0.35;
-      this.armRData.shoulder.rotation.z = 1.3;
-      this.armLData.shoulder.rotation.z = 1.35;
-      if (this.slashTimer <= 0) {
-        this.slashPhase = 'CLEAVE';
-        this.slashTimer = 0.14;
-        window.soundEngine.playSwordSlash();
-      }
-    } else if (this.slashPhase === 'CLEAVE') {
-      this.slashTimer -= dt;
-      this.sword.rotation.z = -1.2;
-      this.chest.rotation.z = 0.45;
-      this.armRData.shoulder.rotation.z = 0.4;
-      this.armLData.shoulder.rotation.z = 0.5;
-      if (this.slashTimer <= 0) {
-        this.slashPhase = 'RECOVERY';
-        this.slashTimer = 0.25;
-      }
-    } else if (this.slashPhase === 'RECOVERY') {
-      this.slashTimer -= dt;
-      this.sword.rotation.z += (-0.35 - this.sword.rotation.z) * 10 * dt;
-      this.chest.rotation.z += (0 - this.chest.rotation.z) * 10 * dt;
-      this.armRData.shoulder.rotation.z += (0.85 - this.armRData.shoulder.rotation.z) * 10 * dt;
-      this.armLData.shoulder.rotation.z += (0.9 - this.armLData.shoulder.rotation.z) * 10 * dt;
-      if (this.slashTimer <= 0) {
-        this.slashPhase = 'IDLE';
-      }
-    }
+    if (this.state === 'ATTACKING' || this.state === 'ALERT') {
+      const targetX = mouse3D.worldX + (this.squadOffsetX || 0);
+      this.targetX = targetX;
+      const dist = targetX - this.group.position.x;
 
-    if (this.state === 'ATTACKING') {
-      const offsetX = this.squadOffsetX !== 0 ? this.squadOffsetX : (mouse3D.worldX > this.group.position.x ? -6 : 6);
-      this.targetX = Math.max(-42, Math.min(42, mouse3D.worldX + offsetX));
-      const dist = this.targetX - this.group.position.x;
-      const isMoving = Math.abs(dist) > 1.2;
-
-      if (isMoving) {
-        const dir = dist > 0 ? 1 : -1;
-        this.group.position.x = Math.max(-44, Math.min(44, this.group.position.x + dir * this.moveSpeed * dt));
-        this.walkCycle += this.moveSpeed * dt * 0.42;
-
-        const gait = this.calculateHumanoidGait(this.walkCycle);
-        this.legLData.hip.rotation.z = gait.legL.hip;
-        this.legLData.knee.rotation.z = gait.legL.knee;
-        this.legLData.ankle.rotation.z = gait.legL.ankle;
-
-        this.legRData.hip.rotation.z = gait.legR.hip;
-        this.legRData.knee.rotation.z = gait.legR.knee;
-        this.legRData.ankle.rotation.z = gait.legR.ankle;
-
-        this.pelvis.position.y = 3.65 + gait.bounceY;
-        this.pelvis.rotation.y = gait.swayY;
-        this.pelvis.rotation.z = gait.rollZ;
-        if (this.slashPhase === 'IDLE') {
-          this.spine.rotation.y = gait.torsoTwistY;
-        }
+      if (Math.abs(dist) > 1.6) {
+        const moveDir = Math.sign(dist);
+        this.group.position.x += moveDir * Math.min(Math.abs(dist), this.moveSpeed * dt);
+        this.playMove(this.moveSpeed);
       } else {
-        this.legLData.hip.rotation.z += (0 - this.legLData.hip.rotation.z) * 8 * dt;
-        this.legLData.knee.rotation.z += (-0.06 - this.legLData.knee.rotation.z) * 8 * dt;
-        this.legRData.hip.rotation.z += (0 - this.legRData.hip.rotation.z) * 8 * dt;
-        this.legRData.knee.rotation.z += (-0.06 - this.legRData.knee.rotation.z) * 8 * dt;
-        this.pelvis.position.y = 3.65 + Math.sin(this.breathCycle) * 0.05;
+        this.playIdle();
       }
 
       this.attackCooldown -= dt;
       if (this.attackCooldown <= 0) {
-        this.meleeAssault(mouse3D, physics3D, sceneManager3D);
+        this.slashSword(mouse3D, physics3D, sceneManager3D);
       }
     } else if (this.state === 'HUNTING') {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
       this.targetX = targetX;
       const dist = targetX - this.group.position.x;
-      if (Math.abs(dist) > 1.5) {
-        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), this.moveSpeed * 0.9 * dt);
-        this.walkCycle += this.moveSpeed * dt * 0.42;
-
-        const gait = this.calculateHumanoidGait(this.walkCycle);
-        this.legLData.hip.rotation.z = gait.legL.hip;
-        this.legLData.knee.rotation.z = gait.legL.knee;
-        this.legLData.ankle.rotation.z = gait.legL.ankle;
-
-        this.legRData.hip.rotation.z = gait.legR.hip;
-        this.legRData.knee.rotation.z = gait.legR.knee;
-        this.legRData.ankle.rotation.z = gait.legR.ankle;
-
-        this.pelvis.position.y = 3.65 + gait.bounceY;
-        this.pelvis.rotation.y = gait.swayY;
-        this.facing = dist >= 0 ? 1 : -1;
+      if (Math.abs(dist) > 1.2) {
+        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 14 * dt);
+        this.playMove(14);
       } else {
-        this.legLData.hip.rotation.z = 0;
-        this.legLData.knee.rotation.z = -0.06;
-        this.legRData.hip.rotation.z = 0;
-        this.legRData.knee.rotation.z = -0.06;
-        this.pelvis.position.y = 3.65 + Math.sin(this.breathCycle) * 0.04;
+        this.playIdle();
       }
-      this.group.rotation.y = (this.facing === 1 ? 0 : Math.PI) + Math.sin(this.huntTimer * 3.0) * 0.4;
-      this.headGroup.rotation.y = Math.sin(this.huntTimer * 3.8) * 0.35;
+
+      const patrolAngle = Math.atan2(Math.sign(dist || this.facing) * 10, 4);
+      let diff = patrolAngle - this.group.rotation.y;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      this.group.rotation.y += diff * Math.min(1.0, 7.0 * dt);
+    }
+
+    if (this.bladeLight) {
+      this.bladeLight.intensity = 0.8 + Math.sin(performance.now() * 0.008) * 0.35;
     }
 
     this.postUpdatePhysics(dt, sceneManager3D, physics3D);
   }
 
-  meleeAssault(mouse3D, physics3D, sceneManager3D) {
+  slashSword(mouse3D, physics3D, sceneManager3D) {
+    if (this.anim) {
+      if (this.anim.getAction('Sword_Attack')) {
+        this.anim.playOnce('Sword_Attack', 'Idle_Weapon', 0.12);
+      }
+    }
+
+    if (this.bladeLight) {
+      this.bladeLight.intensity = 3.5;
+    }
+
     const roll = Math.random();
 
     if (roll < 0.45) {
-      this.slashPhase = 'WINDUP';
-      this.slashTimer = 0.15;
-
+      if (window.soundEngine) window.soundEngine.playJavelinThrow();
       const slashAngle = this.facing === 1 ? 0 : Math.PI;
       physics3D.addProjectile3D({
         type: 'sword_wave',
         x: this.group.position.x + this.facing * 3.2,
         y: 4.8,
-        z: 0.5,
+        z: this.group.position.z + 0.5,
         vx: Math.cos(slashAngle) * 55,
         vy: (mouse3D.worldY - 4.8) * 0.8,
         vz: 0,
@@ -2065,7 +1123,7 @@ class Knight3D extends Character3DBase {
       });
       this.attackCooldown = 0.65;
     } else if (roll < 0.75) {
-      window.soundEngine.playJavelinThrow();
+      if (window.soundEngine) window.soundEngine.playJavelinThrow();
       const dx = mouse3D.worldX - (this.group.position.x + this.facing * 2.2);
       const dy = mouse3D.worldY - 5.5;
       const len = Math.hypot(dx, dy) || 1;
@@ -2075,7 +1133,7 @@ class Knight3D extends Character3DBase {
         type: 'javelin',
         x: this.group.position.x + this.facing * 2.2,
         y: 5.5,
-        z: 0.5,
+        z: this.group.position.z + 0.5,
         vx: (dx / len) * spd,
         vy: (dy / len) * spd,
         vz: 0,
@@ -2084,7 +1142,7 @@ class Knight3D extends Character3DBase {
       this.say("TASTE MY JAVELIN!");
       this.attackCooldown = 0.9;
     } else {
-      window.soundEngine.playHeavyExplosion(0.9);
+      if (window.soundEngine) window.soundEngine.playHeavyExplosion(0.9);
       physics3D.addTrauma(0.5);
       physics3D.spawnSparks3D(this.group.position.x + this.facing * 3.5, 0, 0, 35, 0x94a3b8);
       physics3D.blastRadius3D(this.group.position.x + this.facing * 4.0, 0, 0, 11, 80, sceneManager3D.props);
@@ -2098,12 +1156,12 @@ class Knight3D extends Character3DBase {
   }
 
   fireUpwardAtCursor(mouse3D, physics3D) {
-    window.soundEngine.playJavelinThrow();
+    if (window.soundEngine) window.soundEngine.playJavelinThrow();
     physics3D.addProjectile3D({
       type: 'javelin',
       x: this.group.position.x,
       y: 6.2,
-      z: 0,
+      z: this.group.position.z,
       vx: (mouse3D.worldX - this.group.position.x) * 1.5,
       vy: 75,
       vz: 0,
@@ -2113,18 +1171,15 @@ class Knight3D extends Character3DBase {
 }
 
 // ==========================================
-// 4. SCULPTED ROBOT 3D (Industrial Mech & Hydraulic Ripper)
+// 4. PRODUCTION 3D ROBOT (Skinned Expressive Mech)
 // ==========================================
 class Robot3D extends Character3DBase {
   constructor(x, y, z, scene) {
     super('Robot', x, y, z, scene);
-    this.collisionRadius = 2.6;
-    this.armExtension = 0;
-    this.armTarget = new THREE.Vector3();
+    this.collisionRadius = 2.4;
+    this.moveSpeed = 15;
     this.heldProp = null;
     this.heldChunk = null;
-    this.actionPhase = 'IDLE';
-    this.stateTimer = 0;
 
     this.say("DEMOLITION DIRECTIVE: ALL STRUCTURAL ASSETS TARGETED.");
     this.quips = [
@@ -2145,212 +1200,105 @@ class Robot3D extends Character3DBase {
       "PURGE DIRECTIVE PERSISTS. STANDING BY FOR RE-ENTRY."
     ];
 
-    this.buildMesh();
+    this.attachGLTFModel('robot', (model) => {
+      // Find head and attach glowing cyclops optic sensor light
+      const headNode = model.getObjectByName('Head') || model.getObjectByName('Head_1');
+      this.eyeLight = new THREE.PointLight(0xef4444, 2.2, 12);
+      this.eyeLight.position.set(0, 0.45, 0.4);
+
+      if (headNode) {
+        headNode.add(this.eyeLight);
+      } else {
+        this.group.add(this.eyeLight);
+      }
+    });
   }
 
-  buildMesh() {
-    const hazardTex = TextureGen.createHazardTexture();
-    const castIronMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.85, roughness: 0.3 });
-    const chromeMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, metalness: 0.98, roughness: 0.08 });
-    const yellowMat = new THREE.MeshStandardMaterial({ color: 0xeab308, metalness: 0.6, roughness: 0.35 });
+  playIdle() {
+    if (!this.anim) return;
+    this.anim.play('Idle');
+  }
 
-    // Heavy Rounded Chassis
-    this.torso = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 1.6, 3.8, 16), yellowMat);
-    this.torso.position.y = 4.6;
-    this.torso.castShadow = true;
-    this.group.add(this.torso);
-
-    // Hazard Decal Belt across Chest
-    const hazardMat = new THREE.MeshStandardMaterial({ map: hazardTex, roughness: 0.4 });
-    const chestBelt = new THREE.Mesh(new THREE.CylinderGeometry(1.85, 1.85, 0.9, 16), hazardMat);
-    chestBelt.position.y = 4.6;
-    this.group.add(chestBelt);
-
-    // Articulated Hydraulic Legs with Exposed Chrome Piston Rams
-    this.legL = new THREE.Group();
-    const legCylL = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 2.8, 12), castIronMat);
-    legCylL.position.y = 1.4;
-    const pistonL = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 2.2), chromeMat);
-    pistonL.position.y = 1.4;
-    const footL = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.5, 1.6), castIronMat);
-    footL.position.set(0.2, 0.25, 0);
-    this.legL.add(legCylL);
-    this.legL.add(pistonL);
-    this.legL.add(footL);
-    this.legL.position.set(-1.2, 0, 0);
-    this.group.add(this.legL);
-
-    this.legR = new THREE.Group();
-    const legCylR = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 2.8, 12), castIronMat);
-    legCylR.position.y = 1.4;
-    const pistonR = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 2.2), chromeMat);
-    pistonR.position.y = 1.4;
-    const footR = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.5, 1.6), castIronMat);
-    footR.position.set(0.2, 0.25, 0);
-    this.legR.add(legCylR);
-    this.legR.add(pistonR);
-    this.legR.add(footR);
-    this.legR.position.set(1.2, 0, 0);
-    this.group.add(this.legR);
-
-    // Cyclops Red Optical Sensor with Focused Spotlight
-    const eyeMat = new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xef4444, emissiveIntensity: 1.0 });
-    this.eye = new THREE.Mesh(new THREE.SphereGeometry(0.65, 16, 16), eyeMat);
-    this.eye.position.set(0.7, 5.6, 1.4);
-    this.group.add(this.eye);
-
-    this.eyeSpot = new THREE.SpotLight(0xef4444, 2.5, 30, Math.PI / 6, 0.4);
-    this.eyeSpot.position.set(0.7, 5.6, 1.5);
-    this.eyeSpot.target.position.set(12, 5.6, 1.5);
-    this.group.add(this.eyeSpot);
-    this.group.add(this.eyeSpot.target);
-
-    // Exhaust Smokestacks
-    const pipeL = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 1.4), castIronMat);
-    pipeL.position.set(-0.8, 6.8, -0.9);
-    const pipeR = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 1.4), castIronMat);
-    pipeR.position.set(0.8, 6.8, -0.9);
-    this.group.add(pipeL);
-    this.group.add(pipeR);
-
-    // Multi-Stage Cast-Iron Hydraulic Scissor Arm
-    this.armRoot = new THREE.Group();
-    this.armRoot.position.set(1.9, 5.0, 0);
-    this.group.add(this.armRoot);
-
-    const bronzeMat = new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.85, roughness: 0.25 });
-    for (let b = 0; b < 4; b++) {
-      const beam = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.45, 0.45), bronzeMat);
-      beam.position.set(b * 1.8, 0, 0);
-      const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.6), chromeMat);
-      pin.rotation.x = Math.PI / 2;
-      pin.position.set(b * 1.8, 0, 0);
-      this.armRoot.add(beam);
-      this.armRoot.add(pin);
+  playMove(speed) {
+    if (!this.anim) return;
+    if (speed > 16) {
+      this.anim.play('Running');
+    } else {
+      this.anim.play('Walking');
     }
-
-    // Industrial 3-Jaw Demolition Claw Clamp
-    this.claw = new THREE.Group();
-    const clawBase = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.2), castIronMat);
-    const tooth1 = new THREE.Mesh(new THREE.ConeGeometry(0.35, 1.2, 6), chromeMat);
-    tooth1.position.set(0.6, 0.6, 0);
-    tooth1.rotation.z = -Math.PI / 3;
-    const tooth2 = new THREE.Mesh(new THREE.ConeGeometry(0.35, 1.2, 6), chromeMat);
-    tooth2.position.set(0.6, -0.6, 0);
-    tooth2.rotation.z = Math.PI / 3;
-
-    this.claw.add(clawBase);
-    this.claw.add(tooth1);
-    this.claw.add(tooth2);
-    this.claw.position.set(7.2, 0, 0);
-    this.armRoot.add(this.claw);
-  }
-
-  onStartFreefall() {
-    this.say(this.fallQuips[Math.floor(Math.random() * this.fallQuips.length)], 3.0);
-  }
-
-  onLandImpact() {
-    this.say("IMPACT DAMPENERS ENGAGED. RESUMING PURGE.", 2.2);
-  }
-
-  onStartHunting(lastExitPos) {
-    this.say(this.huntQuips[0]);
-    window.soundEngine.playSonarPing();
-    this.huntPatrolTargetX = lastExitPos ? Math.max(-42, Math.min(42, (lastExitPos.x / window.innerWidth) * 88 - 44)) : (this.facing * 36);
-  }
-
-  onSpotCursor() {
-    this.say("INTRUDER RE-ACQUIRED! PREPARE FOR CRUSH!");
-    window.soundEngine.playAlert();
   }
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
     this.updateCommon(dt, mouse3D, physics3D, sceneManager3D);
+    if (this.state === 'FREEFALL' || this.state === 'LANDING') {
+      this.postUpdatePhysics(dt, sceneManager3D, physics3D);
+      return;
+    }
 
-    if (this.state === 'ATTACKING') {
-      const offsetX = this.squadOffsetX !== 0 ? this.squadOffsetX : (mouse3D.worldX < this.group.position.x ? 20 : -20);
-      const desiredX = mouse3D.worldX + offsetX;
-      this.targetX = Math.max(-42, Math.min(42, desiredX));
-      this.group.position.x += (this.targetX - this.group.position.x) * 2.0 * dt;
+    if (this.state === 'ATTACKING' || this.state === 'ALERT') {
+      const targetX = mouse3D.worldX + (this.squadOffsetX || 0);
+      this.targetX = targetX;
+      const dist = targetX - this.group.position.x;
+
+      if (Math.abs(dist) > 2.0) {
+        const moveDir = Math.sign(dist);
+        this.group.position.x += moveDir * Math.min(Math.abs(dist), this.moveSpeed * dt);
+        this.playMove(this.moveSpeed);
+      } else {
+        this.playIdle();
+      }
 
       this.attackCooldown -= dt;
-
-      if (this.actionPhase === 'EXTEND_RIP') {
-        this.armExtension = Math.min(1.0, this.armExtension + 3.0 * dt);
-        this.updateArmPose();
-        if (this.armExtension >= 1.0) {
-          this.ripTarget(physics3D, sceneManager3D);
-          this.actionPhase = 'HOLD_OVERHEAD';
-          this.stateTimer = 0.35;
-        }
-      } else if (this.actionPhase === 'HOLD_OVERHEAD') {
-        this.stateTimer -= dt;
-        this.armTarget.set(this.group.position.x, 12, 0);
-        this.updateArmPose();
-        if (this.stateTimer <= 0) {
-          this.actionPhase = 'HURL';
-        }
-      } else if (this.actionPhase === 'HURL') {
-        this.hurlObjectAtMouse(mouse3D, physics3D, sceneManager3D);
-        this.actionPhase = 'IDLE';
-        this.armExtension = 0;
-        this.updateArmPose();
-        this.attackCooldown = 1.1;
-      } else if (this.actionPhase === 'EXTEND_PUNCH') {
-        this.armExtension = Math.min(1.0, this.armExtension + 6.0 * dt);
-        this.updateArmPose();
-        if (this.armExtension >= 1.0) {
-          this.actionPhase = 'IDLE';
-          this.armExtension = 0;
-          this.updateArmPose();
-          this.attackCooldown = 0.5;
-        }
-      } else {
-        if (this.attackCooldown <= 0) {
-          this.initiateAttack(mouse3D, physics3D, sceneManager3D);
-        }
+      if (this.attackCooldown <= 0) {
+        this.executeDemolitionAction(mouse3D, physics3D, sceneManager3D);
       }
     } else if (this.state === 'HUNTING') {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
       this.targetX = targetX;
       const dist = targetX - this.group.position.x;
-      if (Math.abs(dist) > 2.0) {
-        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 15 * dt);
-        this.legL.position.y = Math.abs(Math.sin(this.huntTimer * 5.0)) * 0.6;
-        this.legR.position.y = Math.abs(Math.cos(this.huntTimer * 5.0)) * 0.6;
-        this.facing = dist >= 0 ? 1 : -1;
+      if (Math.abs(dist) > 1.2) {
+        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 12 * dt);
+        this.playMove(12);
       } else {
-        this.legL.position.y = 0;
-        this.legR.position.y = 0;
+        // Head shake scanner animation while scanning perimeter!
+        if (this.anim && this.anim.getAction('No')) {
+          this.anim.play('No');
+        } else {
+          this.playIdle();
+        }
       }
-      this.group.rotation.y = (this.facing === 1 ? 0 : Math.PI) + Math.sin(this.huntTimer * 2.8) * 0.45;
-      if (this.eyeSpot) {
-        this.eyeSpot.target.position.x = this.facing * 16 + Math.sin(this.huntTimer * 4.0) * 8;
-        this.eyeSpot.target.position.y = 6 + Math.cos(this.huntTimer * 3.0) * 5;
-      }
+
+      const patrolAngle = Math.atan2(Math.sign(dist || this.facing) * 10, 4);
+      let diff = patrolAngle - this.group.rotation.y;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      this.group.rotation.y += diff * Math.min(1.0, 6.0 * dt);
+    }
+
+    if (this.eyeLight) {
+      this.eyeLight.intensity = 1.8 + Math.sin(performance.now() * 0.01) * 0.5;
     }
 
     this.postUpdatePhysics(dt, sceneManager3D, physics3D);
   }
 
-  updateArmPose() {
-    const scale = 0.3 + this.armExtension * 1.8;
-    this.armRoot.scale.set(scale, 1, 1);
-  }
+  executeDemolitionAction(mouse3D, physics3D, sceneManager3D) {
+    if (this.anim) {
+      this.anim.playOnce('Punch', 'Idle', 0.15);
+    }
 
-  initiateAttack(mouse3D, physics3D, sceneManager3D) {
-    const roll = Math.random();
-
-    if (roll < 0.7) {
-      const target = sceneManager3D.findPropForRobot(this.group.position.x);
-      if (target) {
+    // 40% chance to rip nearby prop or throw debris
+    if (Math.random() < 0.40 && sceneManager3D.props) {
+      const candidates = sceneManager3D.props.filter((p) => p.isAlive() && !p.heldByRobot && Math.abs(p.group.position.x - this.group.position.x) < 18);
+      if (candidates.length > 0) {
+        const target = candidates[Math.floor(Math.random() * candidates.length)];
         this.heldProp = target;
-        this.armTarget.set(target.group.position.x, target.group.position.y + 2, target.group.position.z || 0);
-        this.actionPhase = 'EXTEND_RIP';
-        this.armExtension = 0;
-        window.soundEngine.playRobotServo(true);
+        target.heldByRobot = true;
+        if (window.soundEngine) window.soundEngine.playRobotServo(true);
         this.say("DISMANTLING " + target.name.toUpperCase() + "!");
+        this.ripTarget(physics3D, sceneManager3D);
+        setTimeout(() => this.hurlObjectAtMouse(mouse3D, physics3D, sceneManager3D), 350);
+        this.attackCooldown = 1.4;
         return;
       }
 
@@ -2358,35 +1306,35 @@ class Robot3D extends Character3DBase {
         const chunk = physics3D.debris3D[Math.floor(Math.random() * physics3D.debris3D.length)];
         this.heldChunk = chunk;
         chunk.heldByRobot = true;
-        this.armTarget.copy(chunk.mesh.position);
-        this.actionPhase = 'EXTEND_RIP';
-        this.armExtension = 0;
-        window.soundEngine.playRobotServo(true);
+        if (window.soundEngine) window.soundEngine.playRobotServo(true);
         this.say("HARVESTING FOUNDATION SHARDS!");
+        setTimeout(() => this.hurlObjectAtMouse(mouse3D, physics3D, sceneManager3D), 300);
+        this.attackCooldown = 1.2;
         return;
       }
     }
 
-    this.actionPhase = 'EXTEND_PUNCH';
-    this.armTarget.set(mouse3D.worldX, mouse3D.worldY, mouse3D.worldZ);
-    this.armExtension = 0;
-    window.soundEngine.playRobotServo(true);
-
+    // Standard Hydraulic Punch against cursor
+    if (window.soundEngine) window.soundEngine.playRobotServo(true);
     if (mouse3D.active) {
       setTimeout(() => {
-        if (mouse3D.active && Math.hypot(this.group.position.x + 8 - mouse3D.worldX, 5.0 - mouse3D.worldY) < 5) {
-          window.soundEngine.playArmorClang();
-          window.soundEngine.playShieldDeflect();
+        if (mouse3D.active && Math.hypot(this.group.position.x + this.facing * 5.0 - mouse3D.worldX, 5.0 - mouse3D.worldY) < 6.5) {
+          if (window.soundEngine) {
+            window.soundEngine.playArmorClang();
+            window.soundEngine.playShieldDeflect();
+          }
           physics3D.spawnSparks3D(mouse3D.worldX, mouse3D.worldY, mouse3D.worldZ, 20, 0xf59e0b);
           mouse3D.triggerDeflection();
           physics3D.stats.deflections++;
         }
-      }, 100);
+      }, 120);
     }
+
+    this.attackCooldown = 0.9;
   }
 
   ripTarget(physics3D, sceneManager3D) {
-    window.soundEngine.playRobotRip();
+    if (window.soundEngine) window.soundEngine.playRobotRip();
     physics3D.addTrauma(0.4);
 
     if (this.heldProp) {
@@ -2406,7 +1354,7 @@ class Robot3D extends Character3DBase {
   }
 
   hurlObjectAtMouse(mouse3D, physics3D, sceneManager3D) {
-    window.soundEngine.playRobotThrow();
+    if (window.soundEngine) window.soundEngine.playRobotThrow();
     physics3D.addTrauma(0.45);
 
     const startX = this.group.position.x;
@@ -2446,10 +1394,8 @@ class Robot3D extends Character3DBase {
   }
 
   fireUpwardAtCursor(mouse3D, physics3D) {
-    this.actionPhase = 'EXTEND_PUNCH';
-    this.armExtension = 1.0;
-    this.updateArmPose();
-    window.soundEngine.playRobotServo(true);
+    if (this.anim) this.anim.playOnce('Punch', 'Idle', 0.1);
+    if (window.soundEngine) window.soundEngine.playRobotServo(true);
   }
 
   dispose() {
@@ -2461,6 +1407,8 @@ class Robot3D extends Character3DBase {
   }
 }
 
+// Global class exports
+window.CharacterAssetManager = CharacterAssetManager;
 window.Wizard3D = Wizard3D;
 window.Soldier3D = Soldier3D;
 window.Knight3D = Knight3D;
