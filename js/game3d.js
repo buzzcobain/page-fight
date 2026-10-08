@@ -217,11 +217,19 @@ class GameApp3D {
   initSquad() {
     for (const c of this.squad) c.dispose();
     this.squad = [
-      new Wizard3D(-32, 0, 0, this.scene),
-      new Soldier3D(-11, 0, 0, this.scene),
-      new Knight3D(11, 0, 0, this.scene),
-      new Robot3D(32, 0, 0, this.scene)
+      new Wizard3D(-32, 0, -1.0, this.scene),
+      new Soldier3D(-11, 0, 0.5, this.scene),
+      new Knight3D(11, 0, 1.0, this.scene),
+      new Robot3D(32, 0, -0.5, this.scene)
     ];
+    this.squad[0].squadOffsetX = -24;
+    this.squad[0].squadLaneZ = -1.0;
+    this.squad[1].squadOffsetX = -8;
+    this.squad[1].squadLaneZ = 0.5;
+    this.squad[2].squadOffsetX = 8;
+    this.squad[2].squadLaneZ = 1.0;
+    this.squad[3].squadOffsetX = 24;
+    this.squad[3].squadLaneZ = -0.5;
   }
 
   toggleSquad() {
@@ -301,6 +309,30 @@ class GameApp3D {
     }
   }
 
+  resolveSquadCrowdSeparation() {
+    if (!this.multiSquadMode || this.squad.length < 2) return;
+    for (let i = 0; i < this.squad.length; i++) {
+      for (let j = i + 1; j < this.squad.length; j++) {
+        const a = this.squad[i];
+        const b = this.squad[j];
+        const dx = b.group.position.x - a.group.position.x;
+        const dz = b.group.position.z - a.group.position.z;
+        const dist = Math.hypot(dx, dz);
+        const minDist = (a.collisionRadius || 1.8) + (b.collisionRadius || 1.8);
+
+        if (dist < minDist && dist > 0.001) {
+          const overlap = (minDist - dist) * 0.5;
+          const nx = dx / dist;
+          const nz = dz / dist;
+          a.group.position.x -= nx * overlap;
+          a.group.position.z -= nz * overlap;
+          b.group.position.x += nx * overlap;
+          b.group.position.z += nz * overlap;
+        }
+      }
+    }
+  }
+
   onResize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
@@ -339,6 +371,7 @@ class GameApp3D {
     // 2. UPDATE CHARACTERS
     if (this.multiSquadMode) {
       for (const c of this.squad) c.update(dt, this.mouse3D, this.physics3D, this.sceneManager3D);
+      this.resolveSquadCrowdSeparation();
     } else if (this.character) {
       this.character.update(dt, this.mouse3D, this.physics3D, this.sceneManager3D);
     }

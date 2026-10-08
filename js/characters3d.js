@@ -24,6 +24,13 @@ class Character3DBase {
 
     this.targetX = x;
     this.moveSpeed = 16;
+    this.collisionRadius = 1.8;
+    this.squadLaneZ = z || 0;
+    this.squadOffsetX = 0;
+    this.jumpTimer = 0;
+    this.jumpOriginX = x;
+    this.jumpTargetX = x;
+    this.jumpProgress = 0;
   }
 
   say(text, duration = 2.4) {
@@ -124,6 +131,141 @@ class Character3DBase {
       const q = this.huntQuips[Math.floor(Math.random() * this.huntQuips.length)];
       this.say(q, 2.5);
     }
+  }
+
+  computeNavigationTargetZ(targetX, sceneManager3D) {
+    let desiredZ = this.squadLaneZ || 0;
+
+    if (sceneManager3D && sceneManager3D.props) {
+      const charX = this.group.position.x;
+      const charR = this.collisionRadius || 1.8;
+      const moveDir = targetX > charX ? 1 : (targetX < charX ? -1 : 0);
+
+      for (const prop of sceneManager3D.props) {
+        if (!prop.isAlive()) continue;
+
+        const hw = prop.w / 2;
+        const hd = prop.d / 2;
+        const propX = prop.group.position.x;
+        const propZ = prop.group.position.z || 0;
+
+        const xDist = Math.abs(charX - propX);
+        const inXRange = xDist < hw + charR + 3.0;
+        const movingTowards = moveDir !== 0 && (propX - charX) * moveDir > 0;
+
+        if (inXRange || (movingTowards && xDist < hw + charR + 6.0)) {
+          // Route around front face (+Z toward camera)
+          const clearZ = propZ + hd + charR + 0.8;
+          if (clearZ > desiredZ) {
+            desiredZ = clearZ;
+          }
+        }
+      }
+    }
+
+    return desiredZ;
+  }
+
+  resolveEnvironmentCollisions(dt, sceneManager3D, physics3D) {
+    if (!sceneManager3D || sceneManager3D.isCollapsing || this.state === 'FREEFALL') return;
+
+    const r = this.collisionRadius || 1.8;
+    let px = this.group.position.x;
+    let pz = this.group.position.z;
+
+    // 1. Scenery Prop Physical AABB Collision Resolution (Never clip inside props)
+    if (sceneManager3D.props) {
+      for (const prop of sceneManager3D.props) {
+        if (!prop.isAlive()) continue;
+
+        const hw = prop.w / 2;
+        const hd = prop.d / 2;
+        const propX = prop.group.position.x;
+        const propZ = prop.group.position.z || 0;
+
+        const minX = propX - hw - r;
+        const maxX = propX + hw + r;
+        const minZ = propZ - hd - r;
+        const maxZ = propZ + hd + r;
+
+        if (px >= minX && px <= maxX && pz >= minZ && pz <= maxZ) {
+          const distLeft = px - minX;
+          const distRight = maxX - px;
+          const distBack = pz - minZ;
+          const distFront = maxZ - pz;
+
+          const minDist = Math.min(distLeft, distRight, distBack, distFront);
+
+          if (minDist === distFront) {
+            pz = maxZ;
+          } else if (minDist === distBack) {
+            pz = minZ;
+          } else if (minDist === distLeft) {
+            px = minX;
+          } else {
+            px = maxX;
+          }
+        }
+      }
+    }
+
+    // 2. Clamp Stage Horizontal & Depth Boundaries
+    px = Math.max(-44, Math.min(44, px));
+    pz = Math.max(-5.5, Math.min(7.5, pz));
+
+    this.group.position.x = px;
+    this.group.position.z = pz;
+
+    // 3. Debris Scattering Physics (Characters kick debris out of their way)
+    if (physics3D && physics3D.debris3D) {
+      for (const chunk of physics3D.debris3D) {
+        if (chunk.heldByRobot || !chunk.mesh) continue;
+        const cdx = chunk.mesh.position.x - px;
+        const cdz = chunk.mesh.position.z - pz;
+        const cdist = Math.hypot(cdx, cdz);
+        const touchDist = r + chunk.radius + 0.3;
+
+        if (cdist < touchDist && cdist > 0.001) {
+          const pushForce = 18;
+          chunk.vx += (cdx / cdist) * pushForce;
+          chunk.vz += (cdz / cdist) * pushForce;
+          chunk.vy += 6 + Math.random() * 4;
+          chunk.isSettled = false;
+        }
+      }
+    }
+
+    // 4. Floor Slab Void / Chasm Jumping
+    if (sceneManager3D.floorSlabs && sceneManager3D.floorSlabs.length > 0) {
+      if (sceneManager3D.isSlabCollapsedAt(px)) {
+        if (this.jumpTimer === undefined) this.jumpTimer = 0;
+        if (this.jumpTimer <= 0) {
+          const safeX = sceneManager3D.getNearestIntactSlabX(px);
+          this.jumpTimer = 0.6;
+          this.jumpOriginX = px;
+          this.jumpTargetX = safeX;
+          this.jumpProgress = 0;
+          if (window.soundEngine && typeof window.soundEngine.playJavelinThrow === 'function') {
+            window.soundEngine.playJavelinThrow();
+          }
+        }
+      }
+    }
+
+    if (this.jumpTimer > 0) {
+      this.jumpTimer -= dt;
+      this.jumpProgress = Math.min(1.0, 1.0 - this.jumpTimer / 0.6);
+      this.group.position.x = THREE.MathUtils.lerp(this.jumpOriginX, this.jumpTargetX, this.jumpProgress);
+      this.group.position.y = (this.state === 'FREEFALL' ? this.group.position.y : Math.sin(this.jumpProgress * Math.PI) * 4.5);
+    }
+  }
+
+  postUpdatePhysics(dt, sceneManager3D, physics3D) {
+    if (this.state !== 'FREEFALL') {
+      const desiredZ = this.computeNavigationTargetZ(this.targetX, sceneManager3D);
+      this.group.position.z += (desiredZ - this.group.position.z) * 4.0 * dt;
+    }
+    this.resolveEnvironmentCollisions(dt, sceneManager3D, physics3D);
   }
 
   calculateHumanoidGait(cycle) {
@@ -879,7 +1021,8 @@ class Wizard3D extends Character3DBase {
     }
 
     if (this.state === 'ATTACKING') {
-      const desiredX = mouse3D.worldX < this.group.position.x ? mouse3D.worldX + 18 : mouse3D.worldX - 18;
+      const offsetX = this.squadOffsetX !== 0 ? this.squadOffsetX : (mouse3D.worldX < this.group.position.x ? 18 : -18);
+      const desiredX = mouse3D.worldX + offsetX;
       this.targetX = Math.max(-42, Math.min(42, desiredX));
       const dist = this.targetX - this.group.position.x;
       this.group.position.x += dist * 2.2 * dt;
@@ -906,6 +1049,7 @@ class Wizard3D extends Character3DBase {
       }
     } else if (this.state === 'HUNTING') {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
+      this.targetX = targetX;
       const dist = targetX - this.group.position.x;
       if (Math.abs(dist) > 1.2) {
         this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 16 * dt);
@@ -917,6 +1061,8 @@ class Wizard3D extends Character3DBase {
         this.staff.rotation.x = -0.3 + Math.sin(this.huntTimer * 2.8) * 0.35;
       }
     }
+
+    this.postUpdatePhysics(dt, sceneManager3D, physics3D);
   }
 
   castSpell(mouse3D, physics3D, sceneManager3D) {
@@ -1320,7 +1466,8 @@ class Soldier3D extends Character3DBase {
     }
 
     if (this.state === 'ATTACKING') {
-      const desiredX = mouse3D.worldX + (mouse3D.worldX > this.group.position.x ? -18 : 18);
+      const offsetX = this.squadOffsetX !== 0 ? this.squadOffsetX : (mouse3D.worldX > this.group.position.x ? -18 : 18);
+      const desiredX = mouse3D.worldX + offsetX;
       this.targetX = Math.max(-42, Math.min(42, desiredX));
       const dist = this.targetX - this.group.position.x;
       this.group.position.x += dist * 2.8 * dt;
@@ -1373,6 +1520,7 @@ class Soldier3D extends Character3DBase {
       }
     } else if (this.state === 'HUNTING') {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
+      this.targetX = targetX;
       const dist = targetX - this.group.position.x;
       if (Math.abs(dist) > 1.5) {
         this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 18 * dt);
@@ -1403,6 +1551,8 @@ class Soldier3D extends Character3DBase {
       this.headGroup.rotation.y = Math.sin(this.huntTimer * 4.2) * 0.35;
       this.rifle.rotation.z = Math.sin(this.huntTimer * 2.5) * 0.15;
     }
+
+    this.postUpdatePhysics(dt, sceneManager3D, physics3D);
   }
 
   fireArsenal(mouse3D, physics3D, sceneManager3D) {
@@ -1824,8 +1974,10 @@ class Knight3D extends Character3DBase {
     }
 
     if (this.state === 'ATTACKING') {
-      const dist = mouse3D.worldX - this.group.position.x;
-      const isMoving = Math.abs(dist) > 10;
+      const offsetX = this.squadOffsetX !== 0 ? this.squadOffsetX : (mouse3D.worldX > this.group.position.x ? -6 : 6);
+      this.targetX = Math.max(-42, Math.min(42, mouse3D.worldX + offsetX));
+      const dist = this.targetX - this.group.position.x;
+      const isMoving = Math.abs(dist) > 1.2;
 
       if (isMoving) {
         const dir = dist > 0 ? 1 : -1;
@@ -1861,6 +2013,7 @@ class Knight3D extends Character3DBase {
       }
     } else if (this.state === 'HUNTING') {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
+      this.targetX = targetX;
       const dist = targetX - this.group.position.x;
       if (Math.abs(dist) > 1.5) {
         this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), this.moveSpeed * 0.9 * dt);
@@ -1888,6 +2041,8 @@ class Knight3D extends Character3DBase {
       this.group.rotation.y = (this.facing === 1 ? 0 : Math.PI) + Math.sin(this.huntTimer * 3.0) * 0.4;
       this.headGroup.rotation.y = Math.sin(this.huntTimer * 3.8) * 0.35;
     }
+
+    this.postUpdatePhysics(dt, sceneManager3D, physics3D);
   }
 
   meleeAssault(mouse3D, physics3D, sceneManager3D) {
@@ -1963,6 +2118,7 @@ class Knight3D extends Character3DBase {
 class Robot3D extends Character3DBase {
   constructor(x, y, z, scene) {
     super('Robot', x, y, z, scene);
+    this.collisionRadius = 2.6;
     this.armExtension = 0;
     this.armTarget = new THREE.Vector3();
     this.heldProp = null;
@@ -2113,7 +2269,8 @@ class Robot3D extends Character3DBase {
     this.updateCommon(dt, mouse3D, physics3D, sceneManager3D);
 
     if (this.state === 'ATTACKING') {
-      const desiredX = mouse3D.worldX < this.group.position.x ? mouse3D.worldX + 20 : mouse3D.worldX - 20;
+      const offsetX = this.squadOffsetX !== 0 ? this.squadOffsetX : (mouse3D.worldX < this.group.position.x ? 20 : -20);
+      const desiredX = mouse3D.worldX + offsetX;
       this.targetX = Math.max(-42, Math.min(42, desiredX));
       this.group.position.x += (this.targetX - this.group.position.x) * 2.0 * dt;
 
@@ -2156,6 +2313,7 @@ class Robot3D extends Character3DBase {
       }
     } else if (this.state === 'HUNTING') {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
+      this.targetX = targetX;
       const dist = targetX - this.group.position.x;
       if (Math.abs(dist) > 2.0) {
         this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 15 * dt);
@@ -2172,6 +2330,8 @@ class Robot3D extends Character3DBase {
         this.eyeSpot.target.position.y = 6 + Math.cos(this.huntTimer * 3.0) * 5;
       }
     }
+
+    this.postUpdatePhysics(dt, sceneManager3D, physics3D);
   }
 
   updateArmPose() {
@@ -2235,8 +2395,13 @@ class Robot3D extends Character3DBase {
       } else {
         this.heldProp.heldByRobot = true;
         this.heldProp.isDestroyed = true;
+        if (this.heldProp.group) {
+          this.heldProp.group.position.set(this.group.position.x, 11.5, 0);
+          this.heldProp.group.rotation.z = Math.PI / 6;
+          this.heldProp.group.scale.set(0.65, 0.65, 0.65);
+        }
       }
-      physics3D.spawnSparks3D(this.heldProp.group.position.x, this.heldProp.group.position.y, 0, 15, 0xe2e8f0);
+      physics3D.spawnSparks3D(this.group.position.x, 10, 0, 15, 0xe2e8f0);
     }
   }
 
@@ -2262,6 +2427,9 @@ class Robot3D extends Character3DBase {
           physics3D.debris3D[i].thrownByRobot = true;
         }
       }
+      if (typeof this.heldProp.dispose === 'function') {
+        this.heldProp.dispose();
+      }
       this.heldProp = null;
     } else if (this.heldChunk) {
       this.heldChunk.heldByRobot = false;
@@ -2282,6 +2450,14 @@ class Robot3D extends Character3DBase {
     this.armExtension = 1.0;
     this.updateArmPose();
     window.soundEngine.playRobotServo(true);
+  }
+
+  dispose() {
+    if (this.heldProp && typeof this.heldProp.dispose === 'function') {
+      this.heldProp.dispose();
+      this.heldProp = null;
+    }
+    super.dispose();
   }
 }
 

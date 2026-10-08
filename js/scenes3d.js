@@ -732,11 +732,14 @@ class SceneryProp3D {
     if (this.isDestroyed || this.heldByRobot) return false;
     const px = this.group.position.x;
     const py = this.group.position.y;
+    const pz = this.group.position.z || 0;
+    const zMatch = z === undefined ? true : (z >= pz - this.d / 2 - 1.2 && z <= pz + this.d / 2 + 1.2);
     return (
       x >= px - this.w / 2 &&
       x <= px + this.w / 2 &&
       y >= py &&
-      y <= py + this.h
+      y <= py + this.h &&
+      zMatch
     );
   }
 
@@ -1162,6 +1165,23 @@ class SceneManager3D {
       };
     }
     return null;
+  }
+
+  isSlabCollapsedAt(worldX) {
+    if (this.isCollapsing) return true;
+    for (const slab of this.floorSlabs) {
+      if (Math.abs(slab.x - worldX) <= slab.w / 2) {
+        return slab.collapsed;
+      }
+    }
+    return false;
+  }
+
+  getNearestIntactSlabX(worldX) {
+    const intact = this.floorSlabs.filter(s => !s.collapsed);
+    if (intact.length === 0) return 0;
+    intact.sort((a, b) => Math.abs(a.x - worldX) - Math.abs(b.x - worldX));
+    return intact[0].x;
   }
 
   update(dt, physics3D) {
