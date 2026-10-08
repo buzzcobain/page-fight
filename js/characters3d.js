@@ -1,5 +1,6 @@
 // Production 3D Character Engine using Skinned GLB Meshes & Skeletal Animation Mixers
-// Powered by Three.js GLTFLoader and SkeletonUtils for natural anatomical movement and PBR texturing.
+// Features momentum-based locomotion, synchronized foot-planting cadence, procedural upper-body aim tracking,
+// anticipatory AABB depth steering, and dynamic chasm leap / crack plunge level transitions.
 
 class CharacterAnimationController {
   constructor(model, mixer, animations) {
@@ -14,7 +15,6 @@ class CharacterAnimationController {
       animations.forEach((clip) => {
         const action = mixer.clipAction(clip);
         this.actions[clip.name] = action;
-        // Case-insensitive / alternate name fallback indexing
         this.actions[clip.name.toLowerCase()] = action;
       });
     }
@@ -41,6 +41,12 @@ class CharacterAnimationController {
 
     this.currentAction = nextAction;
     this.currentActionName = name;
+  }
+
+  setTimeScale(scale) {
+    if (this.currentAction) {
+      this.currentAction.setEffectiveTimeScale(scale);
+    }
   }
 
   playOnce(name, fallbackName = 'Idle', fadeDuration = 0.18) {
@@ -146,10 +152,8 @@ const CharacterAssetManager = {
     const cached = this.cache[key];
     if (!cached) return null;
 
-    // Use Three.js SkeletonUtils to deep-clone skinned meshes and bind bones
     const clonedScene = THREE.SkeletonUtils ? THREE.SkeletonUtils.clone(cached.scene) : cached.scene.clone();
 
-    // Enable high-fidelity shadows and ensure PBR surface response
     clonedScene.traverse((node) => {
       if (node.isMesh) {
         node.castShadow = true;
@@ -198,19 +202,27 @@ class Character3DBase {
     this.alertTimer = 0;
     this.landingTimer = 0;
 
+    // Organic Kinematics & Momentum Physics
+    this.vx = 0;
+    this.vy = 0;
+    this.targetVx = 0;
+    this.currentSpeed = 0;
+    this.isGrounded = true;
+    this.isJumping = false;
+    this.jumpCooldown = 0;
+    this.walkSpeed = 7.0;
+    this.runSpeed = 15.5;
+    this.walkCadence = 3.6;
+    this.runCadence = 5.8;
+
     this.attackCooldown = 0;
     this.speechText = '';
     this.speechTimer = 0;
 
     this.targetX = x;
-    this.moveSpeed = 16;
     this.collisionRadius = 1.8;
     this.squadLaneZ = z || 0;
     this.squadOffsetX = 0;
-    this.jumpTimer = 0;
-    this.jumpOriginX = x;
-    this.jumpTargetX = x;
-    this.jumpProgress = 0;
 
     // Model & Animation container
     this.modelInstance = null;
@@ -233,7 +245,6 @@ class Character3DBase {
       this.group.add(this.model);
       this.modelReady = true;
 
-      // Start in default idle pose
       this.playIdle();
 
       if (typeof onReady === 'function') {
@@ -257,20 +268,19 @@ class Character3DBase {
   playIdle() {
     if (!this.anim) return;
     this.anim.play('Idle');
+    this.anim.setTimeScale(1.0);
   }
 
-  playMove(speed) {
+  playMove(speed, preferredClip = 'Run') {
     if (!this.anim) return;
-    if (speed > 18) {
-      if (this.anim.getAction('Run') || this.anim.getAction('Running')) {
-        this.anim.play(this.anim.getAction('Run') ? 'Run' : 'Running');
-        return;
-      }
-    }
-    if (this.anim.getAction('Walk') || this.anim.getAction('Walking')) {
-      this.anim.play(this.anim.getAction('Walk') ? 'Walk' : 'Walking');
+    if (preferredClip === 'Run' || speed > 9.0) {
+      const runName = this.anim.getAction('Run') ? 'Run' : (this.anim.getAction('Running') ? 'Running' : 'Walk');
+      this.anim.play(runName, 0.2);
+      this.anim.setTimeScale(Math.max(0.75, Math.min(2.5, speed / this.runCadence)));
     } else {
-      this.playIdle();
+      const walkName = this.anim.getAction('Walk') ? 'Walk' : (this.anim.getAction('Walking') ? 'Walking' : 'Idle');
+      this.anim.play(walkName, 0.2);
+      this.anim.setTimeScale(Math.max(0.65, Math.min(2.2, speed / this.walkCadence)));
     }
   }
 
@@ -283,9 +293,12 @@ class Character3DBase {
   }
 
   onStartFreefall() {
+    this.isGrounded = false;
+    this.isJumping = false;
     if (this.anim) {
-      if (this.anim.getAction('Death')) this.anim.play('Death', 0.25, THREE.LoopOnce);
-      else if (this.anim.getAction('Jump')) this.anim.play('Jump', 0.25, THREE.LoopOnce);
+      if (this.anim.getAction('Death')) this.anim.play('Death', 0.2, THREE.LoopOnce);
+      else if (this.anim.getAction('Jump')) this.anim.play('Jump', 0.2, THREE.LoopOnce);
+      else if (this.anim.getAction('RecieveHit')) this.anim.play('RecieveHit', 0.2, THREE.LoopOnce);
     }
     if (this.fallQuips && this.fallQuips.length > 0) {
       this.say(this.fallQuips[Math.floor(Math.random() * this.fallQuips.length)], 3.0);
@@ -293,19 +306,21 @@ class Character3DBase {
   }
 
   onLandImpact() {
+    this.group.position.y = 0;
+    this.vy = 0;
+    this.isGrounded = true;
+    this.isJumping = false;
     this.playIdle();
     if (window.soundEngine) window.soundEngine.playHeavyExplosion(0.85);
   }
 
   onStartHunting(lastExitPos) {
-    this.playMove(10);
     if (this.huntQuips && this.huntQuips.length > 0) {
       this.say(this.huntQuips[Math.floor(Math.random() * this.huntQuips.length)], 2.8);
     }
   }
 
   onSpotCursor() {
-    this.playIdle();
     this.say("TARGET RE-ACQUIRED! ENGAGING!");
     if (window.soundEngine) window.soundEngine.playAlertStinger();
   }
@@ -323,7 +338,8 @@ class Character3DBase {
     if (sceneManager3D && sceneManager3D.props) {
       const charX = this.group.position.x;
       const charR = this.collisionRadius || 1.8;
-      const moveDir = targetX > charX ? 1 : (targetX < charX ? -1 : 0);
+      // Anticipate 4 units ahead in direction of movement
+      const lookX = charX + (this.vx || this.facing * 8) * 0.35;
 
       for (const prop of sceneManager3D.props) {
         if (!prop.isAlive()) continue;
@@ -333,13 +349,10 @@ class Character3DBase {
         const propX = prop.group.position.x;
         const propZ = prop.group.position.z || 0;
 
-        const xDist = Math.abs(charX - propX);
-        const inXRange = xDist < hw + charR + 3.0;
-        const movingTowards = moveDir !== 0 && (propX - charX) * moveDir > 0;
-
-        if (inXRange || (movingTowards && xDist < hw + charR + 6.0)) {
+        const xDist = Math.abs(lookX - propX);
+        if (xDist < hw + charR + 2.4) {
           // Route around front face (+Z toward camera)
-          const clearZ = propZ + hd + charR + 0.8;
+          const clearZ = propZ + hd + charR + 1.2;
           if (clearZ > desiredZ) {
             desiredZ = clearZ;
           }
@@ -386,8 +399,10 @@ class Character3DBase {
             pz = minZ;
           } else if (minDist === distLeft) {
             px = minX;
+            if (this.vx > 0) this.vx = 0;
           } else {
             px = maxX;
+            if (this.vx < 0) this.vx = 0;
           }
         }
       }
@@ -418,39 +433,130 @@ class Character3DBase {
         }
       }
     }
+  }
 
-    // 4. Floor Slab Void / Chasm Jumping
-    if (sceneManager3D.floorSlabs && sceneManager3D.floorSlabs.length > 0) {
-      if (sceneManager3D.isSlabCollapsedAt(px)) {
-        if (this.jumpTimer === undefined) this.jumpTimer = 0;
-        if (this.jumpTimer <= 0) {
-          const safeX = sceneManager3D.getNearestIntactSlabX(px);
-          this.jumpTimer = 0.6;
-          this.jumpOriginX = px;
-          this.jumpTargetX = safeX;
-          this.jumpProgress = 0;
-          if (this.anim) {
-            if (this.anim.getAction('Jump')) this.anim.playOnce('Jump', 'Idle');
+  // Unified Organic Locomotion & Crack Navigation Engine
+  updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D) {
+    if (this.jumpCooldown > 0) this.jumpCooldown -= dt;
+
+    // 1. Horizontal Momentum & Acceleration Smoothing
+    const dist = targetX - this.group.position.x;
+    const absDist = Math.abs(dist);
+
+    if (absDist > 2.2) {
+      const desiredSpeed = absDist > 11.0 ? this.runSpeed : this.walkSpeed;
+      this.targetVx = Math.sign(dist) * desiredSpeed;
+    } else {
+      this.targetVx = 0; // Natural deceleration to idle stop
+    }
+
+    const accel = (Math.abs(this.targetVx) > Math.abs(this.vx)) ? 24.0 : 32.0;
+    this.vx += (this.targetVx - this.vx) * Math.min(1.0, accel * dt);
+    this.currentSpeed = Math.abs(this.vx);
+
+    this.group.position.x += this.vx * dt;
+
+    // 2. Crack / Void Lookahead & Athletic Leaping
+    if (sceneManager3D && sceneManager3D.floorSlabs) {
+      const lookDist = Math.max(3.0, this.currentSpeed * 0.4);
+      const aheadX = this.group.position.x + Math.sign(this.vx || this.facing) * lookDist;
+      const crackAhead = sceneManager3D.isSlabCollapsedAt(aheadX);
+
+      // Launch athletic jump over crack when moving forward
+      if (crackAhead && this.isGrounded && this.jumpCooldown <= 0 && this.currentSpeed > 2.5) {
+        this.isGrounded = false;
+        this.isJumping = true;
+        this.jumpCooldown = 0.85;
+        this.vy = 18.5 + Math.min(6.5, this.currentSpeed * 0.35);
+        if (this.anim) {
+          if (this.anim.getAction('Jump')) this.anim.playOnce('Jump', 'Walk');
+          else if (this.anim.getAction('Run')) this.anim.play('Run');
+        }
+        if (window.soundEngine && typeof window.soundEngine.playJavelinThrow === 'function') {
+          window.soundEngine.playJavelinThrow();
+        }
+      }
+
+      // Vertical Trajectory, Landing & Crack Plunging
+      if (!this.isGrounded) {
+        this.vy -= 46.0 * dt;
+        this.group.position.y += this.vy * dt;
+
+        if (this.group.position.y <= 0) {
+          const isFloorMissingHere = sceneManager3D.isSlabCollapsedAt(this.group.position.x);
+
+          if (!isFloorMissingHere) {
+            // Intact floor: safe solid landing!
+            this.group.position.y = 0;
+            this.vy = 0;
+            this.isGrounded = true;
+            this.isJumping = false;
+            if (physics3D) physics3D.spawnSparks3D(this.group.position.x, 0, this.group.position.z, 10, 0x94a3b8);
+          } else {
+            // FELL INTO THE CRACK IN THE GROUND!
+            this.isGrounded = false;
+            if (this.state !== 'FREEFALL') {
+              this.state = 'FREEFALL';
+              this.onStartFreefall();
+            }
+            // Transition directly to next subterranean depth!
+            if (!sceneManager3D.isCollapsing) {
+              sceneManager3D.triggerCollapse(physics3D);
+            }
           }
-          if (window.soundEngine && typeof window.soundEngine.playJavelinThrow === 'function') {
-            window.soundEngine.playJavelinThrow();
-          }
+        }
+      } else {
+        // While standing/walking, if the slab beneath collapses:
+        if (sceneManager3D.isSlabCollapsedAt(this.group.position.x)) {
+          this.isGrounded = false;
+          this.vy = -6.0;
         }
       }
     }
 
-    if (this.jumpTimer > 0) {
-      this.jumpTimer -= dt;
-      this.jumpProgress = Math.min(1.0, 1.0 - this.jumpTimer / 0.6);
-      this.group.position.x = THREE.MathUtils.lerp(this.jumpOriginX, this.jumpTargetX, this.jumpProgress);
-      this.group.position.y = (this.state === 'FREEFALL' ? this.group.position.y : Math.sin(this.jumpProgress * Math.PI) * 4.5);
+    // 3. Cadence-Synchronized Animation Blending (No Foot-Sliding)
+    if (this.isGrounded && this.state !== 'FREEFALL') {
+      if (this.currentSpeed < 0.5) {
+        this.playIdle();
+      } else if (this.currentSpeed < 9.0) {
+        this.playMove(this.currentSpeed, 'Walk');
+      } else {
+        this.playMove(this.currentSpeed, 'Run');
+      }
     }
+
+    // 4. Direction Facing & Athletic Banking Lean
+    let targetAngle = this.group.rotation.y;
+    if (this.currentSpeed > 0.8) {
+      if (this.vx > 0) {
+        targetAngle = Math.PI * 0.5 - 0.22; // Face right with 3/4 camera view
+        this.facing = 1;
+      } else {
+        targetAngle = -Math.PI * 0.5 + 0.22; // Face left with 3/4 camera view
+        this.facing = -1;
+      }
+    } else {
+      // Idle / Combat Aiming: face toward cursor
+      const dx = (mouse3D.worldX || 0) - this.group.position.x;
+      const dz = (mouse3D.worldZ || 0) - this.group.position.z;
+      targetAngle = Math.atan2(dx, dz + 6.5);
+      this.facing = dx >= 0 ? 1 : -1;
+    }
+
+    let diff = targetAngle - this.group.rotation.y;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    this.group.rotation.y += diff * Math.min(1.0, 9.5 * dt);
+
+    // Lateral banking lean into movement velocity
+    const desiredRoll = -this.vx * 0.012;
+    this.group.rotation.z += (desiredRoll - this.group.rotation.z) * 10.0 * dt;
   }
 
   postUpdatePhysics(dt, sceneManager3D, physics3D) {
     if (this.state !== 'FREEFALL') {
       const desiredZ = this.computeNavigationTargetZ(this.targetX, sceneManager3D);
-      this.group.position.z += (desiredZ - this.group.position.z) * 4.0 * dt;
+      this.group.position.z += (desiredZ - this.group.position.z) * 4.5 * dt;
     }
     this.resolveEnvironmentCollisions(dt, sceneManager3D, physics3D);
 
@@ -466,11 +572,15 @@ class Character3DBase {
       if (this.speechTimer <= 0) this.speechText = '';
     }
 
-    if (sceneManager3D.isCollapsing) {
+    if (sceneManager3D.isCollapsing || this.state === 'FREEFALL') {
       if (this.state !== 'FREEFALL') {
         this.state = 'FREEFALL';
         this.onStartFreefall();
       }
+
+      // Plunge vertically down into the shaft!
+      this.vy -= 42.0 * dt;
+      this.group.position.y += this.vy * dt;
       this.group.position.x += (0 - this.group.position.x) * 1.5 * dt;
 
       this.attackCooldown -= dt;
@@ -479,15 +589,12 @@ class Character3DBase {
         this.fireUpwardAtCursor(mouse3D, physics3D);
       }
       return;
-    } else if (this.state === 'FREEFALL') {
-      this.state = 'LANDING';
-      this.landingTimer = 0.7;
-      this.onLandImpact();
-    }
-
-    if (this.state === 'LANDING') {
+    } else if (this.state === 'LANDING') {
       this.landingTimer -= dt;
-      if (this.landingTimer <= 0) this.state = 'ATTACKING';
+      if (this.landingTimer <= 0) {
+        this.state = 'ATTACKING';
+        this.onLandImpact();
+      }
       return;
     }
 
@@ -530,25 +637,6 @@ class Character3DBase {
         if (this.alertTimer <= 0) this.state = 'ATTACKING';
       }
     }
-
-    // Orient character towards cursor in 3D (with subtle camera forward bias)
-    if (this.state !== 'HUNTING') {
-      const targetX = mouse3D.active ? mouse3D.worldX : (mouse3D.lastExitWorldX || this.group.position.x + this.facing * 10);
-      const targetZ = mouse3D.active ? mouse3D.worldZ : 0;
-      const dx = targetX - this.group.position.x;
-      const dz = targetZ - this.group.position.z;
-
-      this.facing = dx >= 0 ? 1 : -1;
-
-      // In Three.js GLTF, forward is +Z. To face target at (dx, dz):
-      // Camera is at +Z looking at 0, so targetAngle = atan2(dx, dz + 5) creates a natural 3/4 frontal view
-      const targetAngle = Math.atan2(dx, dz + 5.5);
-
-      let diff = targetAngle - this.group.rotation.y;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      this.group.rotation.y += diff * Math.min(1.0, 9.0 * dt);
-    }
   }
 
   dispose() {
@@ -580,7 +668,10 @@ class Wizard3D extends Character3DBase {
   constructor(x, y, z, scene) {
     super('Wizard', x, y, z, scene);
     this.collisionRadius = 1.8;
-    this.moveSpeed = 16;
+    this.walkSpeed = 6.5;
+    this.runSpeed = 14.5;
+    this.walkCadence = 3.2;
+    this.runCadence = 5.5;
 
     this.say("THE FOUNDATIONS CANNOT WITHSTAND MY ARCANE FIRE!");
     this.quips = [
@@ -603,7 +694,6 @@ class Wizard3D extends Character3DBase {
     ];
 
     this.attachGLTFModel('wizard', (model) => {
-      // Find staff mesh and attach pulsing arcane aura light
       const staffMesh = model.getObjectByName('Wizard_Staff');
       this.orbLight = new THREE.PointLight(0xc084fc, 1.2, 14);
       this.orbLight.position.set(0, 0.45, 0);
@@ -626,6 +716,7 @@ class Wizard3D extends Character3DBase {
     } else {
       this.anim.play('Idle');
     }
+    this.anim.setTimeScale(1.0);
   }
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
@@ -638,15 +729,7 @@ class Wizard3D extends Character3DBase {
     if (this.state === 'ATTACKING' || this.state === 'ALERT') {
       const targetX = mouse3D.worldX + (this.squadOffsetX || 0);
       this.targetX = targetX;
-      const dist = targetX - this.group.position.x;
-
-      if (Math.abs(dist) > 1.4) {
-        const moveDir = Math.sign(dist);
-        this.group.position.x += moveDir * Math.min(Math.abs(dist), this.moveSpeed * dt);
-        this.playMove(this.moveSpeed);
-      } else {
-        this.playIdle();
-      }
+      this.updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D);
 
       this.attackCooldown -= dt;
       if (this.attackCooldown <= 0) {
@@ -655,19 +738,7 @@ class Wizard3D extends Character3DBase {
     } else if (this.state === 'HUNTING') {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
       this.targetX = targetX;
-      const dist = targetX - this.group.position.x;
-      if (Math.abs(dist) > 1.2) {
-        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 14 * dt);
-        this.playMove(14);
-      } else {
-        this.playIdle();
-      }
-
-      const patrolAngle = Math.atan2(Math.sign(dist || this.facing) * 10, 4);
-      let diff = patrolAngle - this.group.rotation.y;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      this.group.rotation.y += diff * Math.min(1.0, 6.0 * dt);
+      this.updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D);
     }
 
     if (this.orbLight) {
@@ -699,7 +770,7 @@ class Wizard3D extends Character3DBase {
         physics3D.addProjectile3D({
           type: 'magic_missile',
           x: this.group.position.x + this.facing * 2.5,
-          y: 7.2,
+          y: this.group.position.y + 7.2,
           z: this.group.position.z + 0.8,
           vx: Math.cos(spreadAngle) * 32,
           vy: Math.sin(spreadAngle) * 32 + 10,
@@ -771,7 +842,10 @@ class Soldier3D extends Character3DBase {
   constructor(x, y, z, scene) {
     super('Soldier', x, y, z, scene);
     this.collisionRadius = 1.8;
-    this.moveSpeed = 19;
+    this.walkSpeed = 7.5;
+    this.runSpeed = 16.0;
+    this.walkCadence = 3.6;
+    this.runCadence = 5.8;
     this.recoil = 0;
 
     this.say("LOCK AND LOAD! LIGHT UP THE GRID!");
@@ -793,7 +867,6 @@ class Soldier3D extends Character3DBase {
     ];
 
     this.attachGLTFModel('soldier', (model) => {
-      // Find right hand bone and attach tactical carbine
       const rightHand = model.getObjectByName('mixamorigRightHand');
       this.buildTacticalRifle(rightHand || this.group);
     });
@@ -801,18 +874,18 @@ class Soldier3D extends Character3DBase {
 
   buildTacticalRifle(parentBone) {
     this.rifleGroup = new THREE.Group();
-    // Offset and align rifle with right grip
-    this.rifleGroup.position.set(0.12, 0.22, 0.15);
-    this.rifleGroup.rotation.set(-Math.PI * 0.45, 0, Math.PI * 0.5);
+    // Calibrated natural grip placement with barrel pointed forward along +Z
+    this.rifleGroup.position.set(0.08, 0.05, -0.02);
+    this.rifleGroup.rotation.set(2.86, 0.16, 1.66);
 
     const gunMat = new THREE.MeshStandardMaterial({
       color: 0x1e293b,
-      metalness: 0.9,
-      roughness: 0.28
+      metalness: 0.92,
+      roughness: 0.25
     });
     const gripMat = new THREE.MeshStandardMaterial({
       color: 0x0f172a,
-      roughness: 0.7
+      roughness: 0.75
     });
 
     // Receiver chassis
@@ -836,13 +909,13 @@ class Soldier3D extends Character3DBase {
     sight.position.set(0, 0.22, 0.05);
     this.rifleGroup.add(sight);
 
-    // Curved magazine
+    // Curved tactical magazine
     const mag = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.45, 0.26), gripMat);
     mag.position.set(0, -0.28, 0.2);
     mag.rotation.x = -0.25;
     this.rifleGroup.add(mag);
 
-    // Muzzle flash dynamic light
+    // Muzzle flash point light
     this.muzzleLight = new THREE.PointLight(0xf59e0b, 0, 16);
     this.muzzleLight.position.set(0, 0.04, 1.55);
     this.rifleGroup.add(this.muzzleLight);
@@ -858,21 +931,13 @@ class Soldier3D extends Character3DBase {
     }
 
     if (this.muzzleLight && this.muzzleLight.intensity > 0) {
-      this.muzzleLight.intensity = Math.max(0, this.muzzleLight.intensity - dt * 30);
+      this.muzzleLight.intensity = Math.max(0, this.muzzleLight.intensity - dt * 35);
     }
 
     if (this.state === 'ATTACKING' || this.state === 'ALERT') {
       const targetX = mouse3D.worldX + (this.squadOffsetX || 0);
       this.targetX = targetX;
-      const dist = targetX - this.group.position.x;
-
-      if (Math.abs(dist) > 2.0) {
-        const moveDir = Math.sign(dist);
-        this.group.position.x += moveDir * Math.min(Math.abs(dist), this.moveSpeed * dt);
-        this.playMove(this.moveSpeed);
-      } else {
-        this.playIdle();
-      }
+      this.updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D);
 
       this.attackCooldown -= dt;
       if (this.attackCooldown <= 0) {
@@ -881,22 +946,30 @@ class Soldier3D extends Character3DBase {
     } else if (this.state === 'HUNTING') {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
       this.targetX = targetX;
-      const dist = targetX - this.group.position.x;
-      if (Math.abs(dist) > 1.2) {
-        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 15 * dt);
-        this.playMove(15);
-      } else {
-        this.playIdle();
-      }
+      this.updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D);
+    }
 
-      const patrolAngle = Math.atan2(Math.sign(dist || this.facing) * 10, 4);
-      let diff = patrolAngle - this.group.rotation.y;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      this.group.rotation.y += diff * Math.min(1.0, 7.0 * dt);
+    // Procedural weapon recoil recovery
+    if (this.rifleGroup) {
+      this.recoil = Math.max(0, this.recoil - dt * 10);
+      this.rifleGroup.position.z = -0.02 - this.recoil * 0.08;
+      this.rifleGroup.rotation.x = 2.86 + this.recoil * 0.25;
     }
 
     this.postUpdatePhysics(dt, sceneManager3D, physics3D);
+
+    // Procedural Upper-Body Spine Aim Tracking toward Cursor
+    if (this.model && this.modelReady && mouse3D.active && this.state !== 'FREEFALL') {
+      const spine = this.model.getObjectByName('mixamorigSpine1');
+      const head = this.model.getObjectByName('mixamorigHead');
+      if (spine && head) {
+        const dy = mouse3D.worldY - (this.group.position.y + 4.8);
+        const dx = Math.abs(mouse3D.worldX - this.group.position.x) + 3.0;
+        const aimPitch = Math.atan2(dy, dx);
+        spine.rotation.x += aimPitch * 0.28;
+        head.rotation.x += aimPitch * 0.35;
+      }
+    }
   }
 
   fireArsenal(mouse3D, physics3D, sceneManager3D) {
@@ -906,10 +979,11 @@ class Soldier3D extends Character3DBase {
     if (this.muzzleLight) {
       this.muzzleLight.getWorldPosition(barrelWorld);
     } else {
-      barrelWorld.set(this.group.position.x + this.facing * 2.2, 5.2, this.group.position.z);
+      barrelWorld.set(this.group.position.x + this.facing * 2.2, this.group.position.y + 5.2, this.group.position.z);
     }
 
     if (roll < 0.65) {
+      this.recoil = 1.0;
       if (this.muzzleLight) this.muzzleLight.intensity = 5.0;
       if (window.soundEngine) window.soundEngine.playGunshot(false);
 
@@ -931,17 +1005,21 @@ class Soldier3D extends Character3DBase {
         life: 1.5
       });
 
+      // Ejection shell sparks
+      physics3D.spawnSparks3D(barrelWorld.x, barrelWorld.y, barrelWorld.z, 3, 0xf59e0b);
+
       this.attackCooldown = 0.11;
       if (Math.random() < 0.25) {
         sceneManager3D.damageFloorAt(mouse3D.worldX, 3.5, 15, physics3D);
       }
     } else if (roll < 0.85) {
+      this.recoil = 0.6;
       if (window.soundEngine) window.soundEngine.playJavelinThrow();
       const throwAngle = this.facing === 1 ? Math.PI * 0.25 : Math.PI * 0.75;
       physics3D.addProjectile3D({
         type: 'grenade',
         x: this.group.position.x + this.facing * 2.0,
-        y: 5.2,
+        y: this.group.position.y + 5.2,
         z: this.group.position.z + 0.5,
         vx: Math.cos(throwAngle) * 35 + (mouse3D.worldX - this.group.position.x) * 0.4,
         vy: 28,
@@ -951,6 +1029,7 @@ class Soldier3D extends Character3DBase {
       this.say("FRAG OUT!");
       this.attackCooldown = 1.0;
     } else {
+      this.recoil = 2.2;
       if (this.muzzleLight) this.muzzleLight.intensity = 8.0;
       if (window.soundEngine) window.soundEngine.playGunshot(true);
 
@@ -977,12 +1056,13 @@ class Soldier3D extends Character3DBase {
   }
 
   fireUpwardAtCursor(mouse3D, physics3D) {
+    this.recoil = 1.5;
     if (this.muzzleLight) this.muzzleLight.intensity = 4.0;
     if (window.soundEngine) window.soundEngine.playGunshot(false);
     physics3D.addProjectile3D({
       type: 'bullet',
       x: this.group.position.x,
-      y: 6.2,
+      y: this.group.position.y + 6.2,
       z: this.group.position.z,
       vx: (mouse3D.worldX - this.group.position.x) * 1.5,
       vy: 100,
@@ -1000,7 +1080,10 @@ class Knight3D extends Character3DBase {
   constructor(x, y, z, scene) {
     super('Knight', x, y, z, scene);
     this.collisionRadius = 1.9;
-    this.moveSpeed = 17;
+    this.walkSpeed = 7.0;
+    this.runSpeed = 15.0;
+    this.walkCadence = 3.3;
+    this.runCadence = 5.6;
 
     this.say("BY STEEL AND STONE, THOU SHALT BE CRUSHED!");
     this.quips = [
@@ -1021,7 +1104,6 @@ class Knight3D extends Character3DBase {
     ];
 
     this.attachGLTFModel('knight', (model) => {
-      // Find greatsword and attach enchanted blade glow light
       const swordMesh = model.getObjectByName('Warrior_Sword');
       this.bladeLight = new THREE.PointLight(0x38bdf8, 1.0, 10);
       this.bladeLight.position.set(0, 0.4, 0);
@@ -1044,6 +1126,7 @@ class Knight3D extends Character3DBase {
     } else {
       this.anim.play('Idle');
     }
+    this.anim.setTimeScale(1.0);
   }
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
@@ -1056,15 +1139,7 @@ class Knight3D extends Character3DBase {
     if (this.state === 'ATTACKING' || this.state === 'ALERT') {
       const targetX = mouse3D.worldX + (this.squadOffsetX || 0);
       this.targetX = targetX;
-      const dist = targetX - this.group.position.x;
-
-      if (Math.abs(dist) > 1.6) {
-        const moveDir = Math.sign(dist);
-        this.group.position.x += moveDir * Math.min(Math.abs(dist), this.moveSpeed * dt);
-        this.playMove(this.moveSpeed);
-      } else {
-        this.playIdle();
-      }
+      this.updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D);
 
       this.attackCooldown -= dt;
       if (this.attackCooldown <= 0) {
@@ -1073,19 +1148,7 @@ class Knight3D extends Character3DBase {
     } else if (this.state === 'HUNTING') {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
       this.targetX = targetX;
-      const dist = targetX - this.group.position.x;
-      if (Math.abs(dist) > 1.2) {
-        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 14 * dt);
-        this.playMove(14);
-      } else {
-        this.playIdle();
-      }
-
-      const patrolAngle = Math.atan2(Math.sign(dist || this.facing) * 10, 4);
-      let diff = patrolAngle - this.group.rotation.y;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      this.group.rotation.y += diff * Math.min(1.0, 7.0 * dt);
+      this.updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D);
     }
 
     if (this.bladeLight) {
@@ -1114,10 +1177,10 @@ class Knight3D extends Character3DBase {
       physics3D.addProjectile3D({
         type: 'sword_wave',
         x: this.group.position.x + this.facing * 3.2,
-        y: 4.8,
+        y: this.group.position.y + 4.8,
         z: this.group.position.z + 0.5,
         vx: Math.cos(slashAngle) * 55,
-        vy: (mouse3D.worldY - 4.8) * 0.8,
+        vy: (mouse3D.worldY - (this.group.position.y + 4.8)) * 0.8,
         vz: 0,
         life: 0.65
       });
@@ -1125,14 +1188,14 @@ class Knight3D extends Character3DBase {
     } else if (roll < 0.75) {
       if (window.soundEngine) window.soundEngine.playJavelinThrow();
       const dx = mouse3D.worldX - (this.group.position.x + this.facing * 2.2);
-      const dy = mouse3D.worldY - 5.5;
+      const dy = mouse3D.worldY - (this.group.position.y + 5.5);
       const len = Math.hypot(dx, dy) || 1;
       const spd = 68;
 
       physics3D.addProjectile3D({
         type: 'javelin',
         x: this.group.position.x + this.facing * 2.2,
-        y: 5.5,
+        y: this.group.position.y + 5.5,
         z: this.group.position.z + 0.5,
         vx: (dx / len) * spd,
         vy: (dy / len) * spd,
@@ -1144,8 +1207,8 @@ class Knight3D extends Character3DBase {
     } else {
       if (window.soundEngine) window.soundEngine.playHeavyExplosion(0.9);
       physics3D.addTrauma(0.5);
-      physics3D.spawnSparks3D(this.group.position.x + this.facing * 3.5, 0, 0, 35, 0x94a3b8);
-      physics3D.blastRadius3D(this.group.position.x + this.facing * 4.0, 0, 0, 11, 80, sceneManager3D.props);
+      physics3D.spawnSparks3D(this.group.position.x + this.facing * 3.5, this.group.position.y, 0, 35, 0x94a3b8);
+      physics3D.blastRadius3D(this.group.position.x + this.facing * 4.0, this.group.position.y, 0, 11, 80, sceneManager3D.props);
       sceneManager3D.damageFloorAt(this.group.position.x + this.facing * 4.0, 10, 85, physics3D);
 
       mouse3D.triggerDeflection();
@@ -1160,7 +1223,7 @@ class Knight3D extends Character3DBase {
     physics3D.addProjectile3D({
       type: 'javelin',
       x: this.group.position.x,
-      y: 6.2,
+      y: this.group.position.y + 6.2,
       z: this.group.position.z,
       vx: (mouse3D.worldX - this.group.position.x) * 1.5,
       vy: 75,
@@ -1177,7 +1240,10 @@ class Robot3D extends Character3DBase {
   constructor(x, y, z, scene) {
     super('Robot', x, y, z, scene);
     this.collisionRadius = 2.4;
-    this.moveSpeed = 15;
+    this.walkSpeed = 6.8;
+    this.runSpeed = 14.0;
+    this.walkCadence = 3.4;
+    this.runCadence = 5.6;
     this.heldProp = null;
     this.heldChunk = null;
 
@@ -1201,7 +1267,6 @@ class Robot3D extends Character3DBase {
     ];
 
     this.attachGLTFModel('robot', (model) => {
-      // Find head and attach glowing cyclops optic sensor light
       const headNode = model.getObjectByName('Head') || model.getObjectByName('Head_1');
       this.eyeLight = new THREE.PointLight(0xef4444, 2.2, 12);
       this.eyeLight.position.set(0, 0.45, 0.4);
@@ -1217,15 +1282,7 @@ class Robot3D extends Character3DBase {
   playIdle() {
     if (!this.anim) return;
     this.anim.play('Idle');
-  }
-
-  playMove(speed) {
-    if (!this.anim) return;
-    if (speed > 16) {
-      this.anim.play('Running');
-    } else {
-      this.anim.play('Walking');
-    }
+    this.anim.setTimeScale(1.0);
   }
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
@@ -1238,15 +1295,7 @@ class Robot3D extends Character3DBase {
     if (this.state === 'ATTACKING' || this.state === 'ALERT') {
       const targetX = mouse3D.worldX + (this.squadOffsetX || 0);
       this.targetX = targetX;
-      const dist = targetX - this.group.position.x;
-
-      if (Math.abs(dist) > 2.0) {
-        const moveDir = Math.sign(dist);
-        this.group.position.x += moveDir * Math.min(Math.abs(dist), this.moveSpeed * dt);
-        this.playMove(this.moveSpeed);
-      } else {
-        this.playIdle();
-      }
+      this.updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D);
 
       this.attackCooldown -= dt;
       if (this.attackCooldown <= 0) {
@@ -1255,24 +1304,13 @@ class Robot3D extends Character3DBase {
     } else if (this.state === 'HUNTING') {
       const targetX = Math.max(-42, Math.min(42, this.huntPatrolTargetX || 0));
       this.targetX = targetX;
-      const dist = targetX - this.group.position.x;
-      if (Math.abs(dist) > 1.2) {
-        this.group.position.x += Math.sign(dist) * Math.min(Math.abs(dist), 12 * dt);
-        this.playMove(12);
-      } else {
-        // Head shake scanner animation while scanning perimeter!
+      this.updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D);
+
+      if (this.currentSpeed < 0.8) {
         if (this.anim && this.anim.getAction('No')) {
           this.anim.play('No');
-        } else {
-          this.playIdle();
         }
       }
-
-      const patrolAngle = Math.atan2(Math.sign(dist || this.facing) * 10, 4);
-      let diff = patrolAngle - this.group.rotation.y;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      this.group.rotation.y += diff * Math.min(1.0, 6.0 * dt);
     }
 
     if (this.eyeLight) {
@@ -1287,7 +1325,6 @@ class Robot3D extends Character3DBase {
       this.anim.playOnce('Punch', 'Idle', 0.15);
     }
 
-    // 40% chance to rip nearby prop or throw debris
     if (Math.random() < 0.40 && sceneManager3D.props) {
       const candidates = sceneManager3D.props.filter((p) => p.isAlive() && !p.heldByRobot && Math.abs(p.group.position.x - this.group.position.x) < 18);
       if (candidates.length > 0) {
@@ -1314,11 +1351,10 @@ class Robot3D extends Character3DBase {
       }
     }
 
-    // Standard Hydraulic Punch against cursor
     if (window.soundEngine) window.soundEngine.playRobotServo(true);
     if (mouse3D.active) {
       setTimeout(() => {
-        if (mouse3D.active && Math.hypot(this.group.position.x + this.facing * 5.0 - mouse3D.worldX, 5.0 - mouse3D.worldY) < 6.5) {
+        if (mouse3D.active && Math.hypot(this.group.position.x + this.facing * 5.0 - mouse3D.worldX, (this.group.position.y + 5.0) - mouse3D.worldY) < 6.5) {
           if (window.soundEngine) {
             window.soundEngine.playArmorClang();
             window.soundEngine.playShieldDeflect();
@@ -1344,12 +1380,12 @@ class Robot3D extends Character3DBase {
         this.heldProp.heldByRobot = true;
         this.heldProp.isDestroyed = true;
         if (this.heldProp.group) {
-          this.heldProp.group.position.set(this.group.position.x, 11.5, 0);
+          this.heldProp.group.position.set(this.group.position.x, this.group.position.y + 11.5, 0);
           this.heldProp.group.rotation.z = Math.PI / 6;
           this.heldProp.group.scale.set(0.65, 0.65, 0.65);
         }
       }
-      physics3D.spawnSparks3D(this.group.position.x, 10, 0, 15, 0xe2e8f0);
+      physics3D.spawnSparks3D(this.group.position.x, this.group.position.y + 10, 0, 15, 0xe2e8f0);
     }
   }
 
@@ -1358,7 +1394,7 @@ class Robot3D extends Character3DBase {
     physics3D.addTrauma(0.45);
 
     const startX = this.group.position.x;
-    const startY = 11;
+    const startY = this.group.position.y + 11;
     const dx = mouse3D.worldX - startX;
     const dy = mouse3D.worldY - startY;
     const dz = mouse3D.worldZ;

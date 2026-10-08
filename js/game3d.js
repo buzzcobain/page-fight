@@ -352,12 +352,14 @@ class GameApp3D {
         this.character.group.position.y = 0;
         this.character.state = 'LANDING';
         this.character.landingTimer = 0.7;
+        this.character.onLandImpact();
       }
       if (this.multiSquadMode) {
         for (const c of this.squad) {
           c.group.position.y = 0;
           c.state = 'LANDING';
           c.landingTimer = 0.7;
+          c.onLandImpact();
         }
       }
       this.physics3D.spawnSparks3D(0, 0, 0, 60, 0x94a3b8);

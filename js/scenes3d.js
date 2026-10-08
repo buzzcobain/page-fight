@@ -1169,12 +1169,17 @@ class SceneManager3D {
 
   isSlabCollapsedAt(worldX) {
     if (this.isCollapsing) return true;
+    if (worldX < -48 || worldX > 48) return true;
     for (const slab of this.floorSlabs) {
       if (Math.abs(slab.x - worldX) <= slab.w / 2) {
         return slab.collapsed;
       }
     }
-    return false;
+    return true;
+  }
+
+  isFloorIntactAt(worldX) {
+    return !this.isSlabCollapsedAt(worldX);
   }
 
   getNearestIntactSlabX(worldX) {
