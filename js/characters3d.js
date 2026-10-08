@@ -184,15 +184,24 @@ class Character3DBase {
     cranium.castShadow = true;
     headGroup.add(cranium);
 
-    // Anatomical Jaw & Chin (tapers forward toward +X)
+    // Anatomical Jaw & Smooth Contoured Chin (tapers forward toward +X)
     const jaw = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.38, 0.75, 14), skinMat);
     jaw.position.set(0.12, -0.45, 0);
     jaw.scale.set(0.95, 1, 0.85);
     headGroup.add(jaw);
 
-    const chin = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.32, 0.44), skinMat);
-    chin.position.set(0.38, -0.68, 0);
+    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 10), skinMat);
+    chin.position.set(0.42, -0.65, 0);
+    chin.scale.set(1.2, 0.85, 1.1);
     headGroup.add(chin);
+
+    // Sculpted Cheekbones (Zygomatic arches)
+    for (const z of [0.42, -0.42]) {
+      const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.24, 8, 8), skinMat);
+      cheek.position.set(0.38, -0.15, z);
+      cheek.scale.set(1.1, 0.7, 0.9);
+      headGroup.add(cheek);
+    }
 
     // Neck
     const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.48, 0.85, 14), skinMat);
@@ -251,15 +260,15 @@ class Character3DBase {
     const browColor = characterType === 'wizard' ? 0xd1d5db : 0x29140a;
     const browMat = new THREE.MeshStandardMaterial({ color: browColor, roughness: 0.8 });
     for (const z of zOffsets) {
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.08, 0.32), browMat);
-      brow.position.set(0.66, 0.24, z);
-      brow.rotation.z = -0.15;
-      brow.rotation.y = z > 0 ? 0.2 : -0.2;
+      const brow = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.04, 6, 10, Math.PI * 0.75), browMat);
+      brow.position.set(0.62, 0.22, z);
+      brow.rotation.y = z > 0 ? 0.3 : -0.3;
+      brow.rotation.x = Math.PI * 0.55;
       headGroup.add(brow);
     }
 
     // Sculpted 3D Nose
-    const noseBridge = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.45, 0.16), skinMat);
+    const noseBridge = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.14, 0.45, 8), skinMat);
     noseBridge.position.set(0.72, -0.05, 0);
     noseBridge.rotation.z = -0.32;
     headGroup.add(noseBridge);
@@ -275,15 +284,16 @@ class Character3DBase {
     nostrilR.position.set(0.78, -0.25, -0.12);
     headGroup.add(nostrilR);
 
-    // Sculpted 3D Lips
+    // Sculpted 3D Lips (Smooth Vermilion Contours)
     const lipMat = new THREE.MeshStandardMaterial({ color: 0x9f4a3c, roughness: 0.5 });
-    const upperLip = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.09, 0.36), lipMat);
-    upperLip.position.set(0.66, -0.42, 0);
-    upperLip.rotation.z = -0.15;
+    const upperLip = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8), lipMat);
+    upperLip.position.set(0.68, -0.42, 0);
+    upperLip.scale.set(1.1, 0.5, 1.8);
     headGroup.add(upperLip);
 
-    const lowerLip = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.32), lipMat);
-    lowerLip.position.set(0.62, -0.52, 0);
+    const lowerLip = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 8), lipMat);
+    lowerLip.position.set(0.65, -0.52, 0);
+    lowerLip.scale.set(1.1, 0.6, 1.6);
     headGroup.add(lowerLip);
 
     // Anatomical Ears
@@ -298,86 +308,209 @@ class Character3DBase {
     return { headGroup, cranium, skinMat };
   }
 
-  buildArticulatedLeg(thighMat, kneeMat, shinMat, bootMat, side = 1) {
+  createSculptedFoot(bootMat, style = 'combat') {
+    const footGroup = new THREE.Group();
+
+    // 1. Contoured Sole with arch & heel lift
+    const sole = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.22, 0.56), bootMat);
+    sole.position.set(0.42, -0.32, 0);
+    sole.castShadow = true;
+    footGroup.add(sole);
+
+    // 2. Heel block
+    const heel = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.26, 0.54), bootMat);
+    heel.position.set(-0.06, -0.28, 0);
+    heel.castShadow = true;
+    footGroup.add(heel);
+
+    // 3. Rounded Toe Cap (curves upward at front)
+    const toeCap = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 10, 0, Math.PI), bootMat);
+    toeCap.rotation.y = Math.PI / 2;
+    toeCap.rotation.x = Math.PI / 2;
+    toeCap.position.set(0.92, -0.16, 0);
+    toeCap.scale.set(0.9, 0.7, 1);
+    toeCap.castShadow = true;
+    footGroup.add(toeCap);
+
+    // 4. Instep & Vamp (slopes upward toward ankle)
+    const instep = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.34, 0.75, 10), bootMat);
+    instep.rotation.z = Math.PI / 3;
+    instep.position.set(0.45, -0.12, 0);
+    instep.scale.set(1, 0.9, 0.85);
+    instep.castShadow = true;
+    footGroup.add(instep);
+
+    // 5. Padded Ankle Collar (seamlessly wraps around lower shin)
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.35, 0.55, 12), bootMat);
+    collar.position.set(0.08, 0.05, 0);
+    collar.castShadow = true;
+    footGroup.add(collar);
+
+    return footGroup;
+  }
+
+  createSculptedHand(handMat, isGlove = false, fingerFlex = 0.5) {
+    const handGroup = new THREE.Group();
+
+    // Palm base with thenar eminence
+    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.45, 0.26), handMat);
+    palm.position.set(0.12, -0.22, 0);
+    palm.castShadow = true;
+    handGroup.add(palm);
+
+    // Opposable Thumb
+    const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.28, 8), handMat);
+    thumb.position.set(0.18, -0.15, 0.16);
+    thumb.rotation.z = -Math.PI / 4;
+    thumb.rotation.x = Math.PI / 4;
+    thumb.castShadow = true;
+    handGroup.add(thumb);
+
+    // 4 Articulated Fingers (Index, Middle, Ring, Pinky)
+    const fingerOffsets = [0.09, 0.03, -0.03, -0.09];
+    const fingerLengths = [0.30, 0.34, 0.32, 0.26];
+    for (let i = 0; i < 4; i++) {
+      const finger = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, fingerLengths[i], 8), handMat);
+      finger.position.set(0.18 + fingerFlex * 0.05, -0.42 - fingerLengths[i] * 0.35, fingerOffsets[i]);
+      finger.rotation.z = -fingerFlex;
+      finger.castShadow = true;
+      handGroup.add(finger);
+    }
+
+    return handGroup;
+  }
+
+  buildArticulatedLeg(thighMat, kneeMat, shinMat, bootMat, side = 1, style = 'combat') {
     const hip = new THREE.Group();
     hip.position.set(0, 0, side * 0.55);
 
-    const thighLen = 1.6;
-    const shinLen = 1.6;
+    // 1. Anatomical Muscular Thigh (LatheGeometry with smooth quadriceps curvature)
+    const thighPts = [
+      [0, 0.15],
+      [0.52, 0.0],
+      [0.58, -0.45],
+      [0.50, -0.9],
+      [0.40, -1.35],
+      [0.35, -1.58],
+      [0, -1.65]
+    ].map(p => new THREE.Vector2(p[0], p[1]));
+    const thighGeom = new THREE.LatheGeometry(thighPts, 16);
+    thighGeom.computeVertexNormals();
 
-    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.36, thighLen, 14), thighMat);
-    thigh.position.y = -thighLen * 0.5;
+    const thigh = new THREE.Mesh(thighGeom, thighMat);
+    thigh.scale.set(1.0, 1.0, 0.9);
     thigh.castShadow = true;
     hip.add(thigh);
 
+    // 2. Seamless Knee Hinge (NO BALL BEARING!)
     const knee = new THREE.Group();
-    knee.position.y = -thighLen;
+    knee.position.y = -1.6;
     hip.add(knee);
 
-    const patella = new THREE.Mesh(new THREE.SphereGeometry(0.36, 12, 12), kneeMat);
-    patella.position.set(0.12, 0, 0);
-    patella.scale.set(1.1, 1, 1);
+    // Anatomical Patella Tendon Guard / Knee Plate
+    const patella = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.48, 12), kneeMat);
+    patella.position.set(0.18, 0, 0);
+    patella.scale.set(0.65, 1, 0.85);
     patella.castShadow = true;
     knee.add(patella);
 
-    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.3, shinLen, 14), shinMat);
-    shin.position.y = -shinLen * 0.5;
+    // 3. Anatomical Shin / Muscular Calf (LatheGeometry with gastrocnemius bulge)
+    const shinPts = [
+      [0, 0.08],
+      [0.38, 0.0],
+      [0.48, -0.42],
+      [0.42, -0.85],
+      [0.32, -1.25],
+      [0.27, -1.55],
+      [0, -1.62]
+    ].map(p => new THREE.Vector2(p[0], p[1]));
+    const shinGeom = new THREE.LatheGeometry(shinPts, 16);
+    shinGeom.computeVertexNormals();
+
+    const shin = new THREE.Mesh(shinGeom, shinMat);
+    shin.scale.set(1.0, 1.0, 0.88);
     shin.castShadow = true;
     knee.add(shin);
 
+    // 4. Ankle Joint & Sculpted Footwear (NO BOX!)
     const ankle = new THREE.Group();
-    ankle.position.y = -shinLen;
+    ankle.position.y = -1.6;
     knee.add(ankle);
 
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.52, 0.55), bootMat);
-    foot.position.set(0.38, -0.22, 0);
-    foot.castShadow = true;
+    const foot = this.createSculptedFoot(bootMat, style);
     ankle.add(foot);
-
-    const heel = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.35, 0.52), bootMat);
-    heel.position.set(-0.15, -0.28, 0);
-    heel.castShadow = true;
-    ankle.add(heel);
 
     return { hip, knee, ankle, thigh, patella, shin, foot };
   }
 
-  buildArticulatedArm(upperMat, elbowMat, forearmMat, handMat, side = 1) {
+  buildArticulatedArm(upperMat, elbowMat, forearmMat, handMat, side = 1, isGlove = false) {
     const shoulder = new THREE.Group();
     shoulder.position.set(0, 0, side * 1.0);
 
-    const upperLen = 1.35;
-    const forearmLen = 1.35;
+    // 1. Anatomical Deltoid Shoulder Cap covering the joint seamlessly
+    const deltoid = new THREE.Mesh(new THREE.SphereGeometry(0.48, 14, 14), upperMat);
+    deltoid.position.set(0, 0.05, 0);
+    deltoid.scale.set(0.9, 1.15, 0.95);
+    deltoid.castShadow = true;
+    shoulder.add(deltoid);
 
-    const upperArm = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.28, upperLen, 12), upperMat);
-    upperArm.position.y = -upperLen * 0.5;
+    // 2. Anatomical Muscular Upper Arm (LatheGeometry with bicep/tricep volume)
+    const armPts = [
+      [0, 0.12],
+      [0.44, 0.0],
+      [0.42, -0.35],
+      [0.38, -0.75],
+      [0.30, -1.15],
+      [0.26, -1.35],
+      [0, -1.40]
+    ].map(p => new THREE.Vector2(p[0], p[1]));
+    const armGeom = new THREE.LatheGeometry(armPts, 14);
+    armGeom.computeVertexNormals();
+
+    const upperArm = new THREE.Mesh(armGeom, upperMat);
+    upperArm.scale.set(1.0, 1.0, 0.9);
     upperArm.castShadow = true;
     shoulder.add(upperArm);
 
+    // 3. Seamless Elbow Hinge (NO BALL BEARING!)
     const elbow = new THREE.Group();
-    elbow.position.y = -upperLen;
+    elbow.position.y = -1.35;
     shoulder.add(elbow);
 
-    const elbowJoint = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 10), elbowMat);
-    elbowJoint.position.set(-0.06, 0, 0);
-    elbowJoint.castShadow = true;
-    elbow.add(elbowJoint);
+    // Anatomical Olecranon / Elbow Guard
+    const elbowCop = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 10), elbowMat);
+    elbowCop.position.set(-0.1, 0, 0);
+    elbowCop.scale.set(0.85, 0.85, 0.8);
+    elbowCop.castShadow = true;
+    elbow.add(elbowCop);
 
-    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.24, forearmLen, 12), forearmMat);
-    forearm.position.y = -forearmLen * 0.5;
+    // 4. Anatomical Muscular Forearm (LatheGeometry with brachioradialis bulge)
+    const forearmPts = [
+      [0, 0.06],
+      [0.28, 0.0],
+      [0.36, -0.32],
+      [0.30, -0.72],
+      [0.24, -1.12],
+      [0.21, -1.35],
+      [0, -1.40]
+    ].map(p => new THREE.Vector2(p[0], p[1]));
+    const forearmGeom = new THREE.LatheGeometry(forearmPts, 14);
+    forearmGeom.computeVertexNormals();
+
+    const forearm = new THREE.Mesh(forearmGeom, forearmMat);
+    forearm.scale.set(1.0, 1.0, 0.88);
     forearm.castShadow = true;
     elbow.add(forearm);
 
+    // 5. Wrist Joint & Sculpted Multi-Finger Hand (NO BRICK!)
     const wrist = new THREE.Group();
-    wrist.position.y = -forearmLen;
+    wrist.position.y = -1.35;
     elbow.add(wrist);
 
-    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.3, 0.28), handMat);
-    hand.position.set(0.12, -0.15, 0);
-    hand.castShadow = true;
+    const hand = this.createSculptedHand(handMat, isGlove);
     wrist.add(hand);
 
-    return { shoulder, elbow, wrist, upperArm, elbowJoint, forearm, hand };
+    return { shoulder, elbow, wrist, upperArm, elbowCop, forearm, hand };
   }
 
   dispose() {
@@ -527,10 +660,23 @@ class Wizard3D extends Character3DBase {
     this.chest.position.y = 1.05;
     this.spine.add(this.chest);
 
-    // Upper Cassock
-    const chestGeom = new THREE.CylinderGeometry(1.25, 0.95, 1.7, 16);
-    const chest = new THREE.Mesh(chestGeom, robeMat);
-    chest.position.y = 0.65;
+    // Upper Velvet Cassock (sculpted anatomical robe chest)
+    const cassockPts = [
+      [0, 1.35],
+      [0.8, 1.3],
+      [1.25, 1.05],
+      [1.35, 0.65],
+      [1.15, 0.25],
+      [0.95, -0.2],
+      [1.02, -0.65],
+      [0, -0.75]
+    ].map(p => new THREE.Vector2(p[0], p[1]));
+    const cassockGeom = new THREE.LatheGeometry(cassockPts, 18);
+    cassockGeom.computeVertexNormals();
+
+    const chest = new THREE.Mesh(cassockGeom, robeMat);
+    chest.position.y = 0.55;
+    chest.scale.set(1.0, 1.0, 0.88);
     chest.castShadow = true;
     this.chest.add(chest);
 
@@ -957,14 +1103,31 @@ class Soldier3D extends Character3DBase {
     this.chest.position.y = 1.0;
     this.spine.add(this.chest);
 
-    const chestRig = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.75), vestMat);
+    // Sculpted Athletic Human Torso (LatheGeometry with broad pectorals, tapered waist, obliques)
+    const torsoPts = [
+      [0, 1.35],
+      [0.72, 1.3],
+      [1.15, 1.05],
+      [1.24, 0.65],
+      [1.10, 0.25],
+      [0.94, -0.2],
+      [0.98, -0.65],
+      [0, -0.75]
+    ].map(p => new THREE.Vector2(p[0], p[1]));
+    const torsoGeom = new THREE.LatheGeometry(torsoPts, 18);
+    torsoGeom.computeVertexNormals();
+
+    const chestRig = new THREE.Mesh(torsoGeom, vestMat);
     chestRig.position.y = 0.55;
+    chestRig.scale.set(1.0, 1.0, 0.88);
     chestRig.castShadow = true;
     this.chest.add(chestRig);
 
-    // Front Strike Face Ceramic Armor Plate
-    const frontPlate = new THREE.Mesh(new THREE.BoxGeometry(0.15, 1.15, 1.3), vestMat);
-    frontPlate.position.set(0.72, 0.55, 0);
+    // Contoured Front Ceramic Strike Plate (curves to match torso)
+    const frontPlateGeom = new THREE.CylinderGeometry(0.72, 0.78, 1.15, 14, 1, false, -Math.PI / 3, Math.PI * 0.66);
+    const frontPlate = new THREE.Mesh(frontPlateGeom, vestMat);
+    frontPlate.rotation.y = -Math.PI / 2;
+    frontPlate.position.set(0.65, 0.55, 0);
     this.chest.add(frontPlate);
 
     // 3 M4 Magazine Pouches on Front Webbing
@@ -1455,9 +1618,23 @@ class Knight3D extends Character3DBase {
     this.chest.position.y = 1.05;
     this.spine.add(this.chest);
 
-    // Peascod Cuirass with central vertical deflection ridge
-    const cuirass = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.05, 1.8, 16), steelMat);
-    cuirass.position.y = 0.65;
+    // Fluted Gothic Peascod Cuirass (anatomical curved breastplate with central deflection keel)
+    const cuirassPts = [
+      [0, 1.35],
+      [0.85, 1.3],
+      [1.3, 1.05],
+      [1.4, 0.65],
+      [1.2, 0.25],
+      [1.02, -0.2],
+      [1.08, -0.65],
+      [0, -0.75]
+    ].map(p => new THREE.Vector2(p[0], p[1]));
+    const cuirassGeom = new THREE.LatheGeometry(cuirassPts, 18);
+    cuirassGeom.computeVertexNormals();
+
+    const cuirass = new THREE.Mesh(cuirassGeom, steelMat);
+    cuirass.position.y = 0.55;
+    cuirass.scale.set(1.05, 1.0, 0.9);
     cuirass.castShadow = true;
     this.chest.add(cuirass);
 
