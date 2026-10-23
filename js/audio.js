@@ -528,6 +528,73 @@ class SoundFX {
     });
   }
 
+  playAlertStinger() {
+    this.playAlert();
+  }
+
+  playRepulsorBlast() {
+    if (this.muted) return;
+    this.ensureContext();
+    if (!this.ctx) return;
+
+    const t = this.ctx.currentTime;
+    const dur = 0.28;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(520, t);
+    osc.frequency.exponentialRampToValueAtTime(55, t + dur);
+
+    gain.gain.setValueAtTime(0.85, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(t);
+    osc.stop(t + dur);
+
+    // High-tech harmonic snap
+    const snap = this.ctx.createOscillator();
+    const snapGain = this.ctx.createGain();
+    snap.type = 'triangle';
+    snap.frequency.setValueAtTime(1800, t);
+    snap.frequency.exponentialRampToValueAtTime(320, t + 0.09);
+    snapGain.gain.setValueAtTime(0.45, t);
+    snapGain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+
+    snap.connect(snapGain);
+    snapGain.connect(this.masterGain);
+    snap.start(t);
+    snap.stop(t + 0.09);
+  }
+
+  playParryReflect() {
+    if (this.muted) return;
+    this.ensureContext();
+    if (!this.ctx) return;
+
+    const t = this.ctx.currentTime;
+    const dur = 0.32;
+
+    [880, 1320, 2640].forEach((freq, i) => {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = i === 0 ? 'sawtooth' : 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.4, t + 0.06);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.9, t + dur);
+
+      gain.gain.setValueAtTime(0.35 / (i + 1), t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + dur);
+    });
+  }
+
   playEarthquakeRumble(dur = 1.2) {
     if (this.muted) return;
     this.ensureContext();

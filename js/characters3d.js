@@ -216,6 +216,8 @@ class Character3DBase {
     this.runCadence = 5.8;
 
     this.attackCooldown = 0;
+    this.rage = 0;
+    this.staggerTimer = 0;
     this.speechText = '';
     this.speechTimer = 0;
 
@@ -289,6 +291,28 @@ class Character3DBase {
     this.speechTimer = duration;
     if (window.app3D) {
       window.app3D.setDialogue(this.name, text, duration);
+    }
+  }
+
+  applyKnockback(kx, ky, label = '') {
+    if (this.state === 'FREEFALL') return;
+    this.vx = kx;
+    this.vy = Math.max(this.vy, ky);
+    this.isGrounded = false;
+    this.isJumping = false;
+    this.staggerTimer = 0.38;
+    this.rage = Math.min(2.5, this.rage + 0.35);
+
+    if (this.anim) {
+      if (this.anim.getAction('RecieveHit')) {
+        this.anim.playOnce('RecieveHit', 'Idle', 0.1);
+      } else if (this.anim.getAction('HitReact')) {
+        this.anim.playOnce('HitReact', 'Idle', 0.1);
+      }
+    }
+
+    if (label && Math.random() < 0.75) {
+      this.say(`${label}?! UNFORGIVABLE!`, 2.0);
     }
   }
 
@@ -438,36 +462,46 @@ class Character3DBase {
   // Unified Organic Locomotion & Crack Navigation Engine
   updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D) {
     if (this.jumpCooldown > 0) this.jumpCooldown -= dt;
+    if (this.staggerTimer > 0) this.staggerTimer -= dt;
+    if (this.rage > 0) this.rage = Math.max(0, this.rage - dt * 0.08);
+
+    const rageMult = 1.0 + this.rage * 0.16;
 
     // 1. Horizontal Momentum & Acceleration Smoothing
     const dist = targetX - this.group.position.x;
     const absDist = Math.abs(dist);
 
-    if (absDist > 2.2) {
-      const desiredSpeed = absDist > 11.0 ? this.runSpeed : this.walkSpeed;
-      this.targetVx = Math.sign(dist) * desiredSpeed;
+    if (this.staggerTimer <= 0) {
+      if (absDist > 2.2) {
+        const desiredSpeed = (absDist > 11.0 ? this.runSpeed : this.walkSpeed) * rageMult;
+        this.targetVx = Math.sign(dist) * desiredSpeed;
+      } else {
+        this.targetVx = 0; // Natural deceleration to idle stop
+      }
+
+      const accel = (Math.abs(this.targetVx) > Math.abs(this.vx)) ? 24.0 : 32.0;
+      this.vx += (this.targetVx - this.vx) * Math.min(1.0, accel * dt);
     } else {
-      this.targetVx = 0; // Natural deceleration to idle stop
+      // Air/knockback drag while staggered
+      this.vx *= Math.max(0, 1.0 - 2.5 * dt);
     }
 
-    const accel = (Math.abs(this.targetVx) > Math.abs(this.vx)) ? 24.0 : 32.0;
-    this.vx += (this.targetVx - this.vx) * Math.min(1.0, accel * dt);
     this.currentSpeed = Math.abs(this.vx);
-
     this.group.position.x += this.vx * dt;
 
-    // 2. Crack / Void Lookahead & Athletic Leaping
+    // 2. Crack / Void Lookahead & Calibrated Leaping
     if (sceneManager3D && sceneManager3D.floorSlabs) {
-      const lookDist = Math.max(3.0, this.currentSpeed * 0.4);
+      const standingOnVoid = sceneManager3D.isSlabCollapsedAt(this.group.position.x);
+      const lookDist = Math.max(1.8, Math.min(3.4, this.currentSpeed * 0.2));
       const aheadX = this.group.position.x + Math.sign(this.vx || this.facing) * lookDist;
-      const crackAhead = sceneManager3D.isSlabCollapsedAt(aheadX);
+      const crackAhead = !standingOnVoid && sceneManager3D.isSlabCollapsedAt(aheadX);
 
-      // Launch athletic jump over crack when moving forward
-      if (crackAhead && this.isGrounded && this.jumpCooldown <= 0 && this.currentSpeed > 2.5) {
+      // Launch calibrated athletic jump over a 1-slab crack when moving forward from solid ground
+      if (crackAhead && this.isGrounded && this.staggerTimer <= 0 && this.jumpCooldown <= 0 && this.currentSpeed > 3.2) {
         this.isGrounded = false;
         this.isJumping = true;
-        this.jumpCooldown = 0.85;
-        this.vy = 18.5 + Math.min(6.5, this.currentSpeed * 0.35);
+        this.jumpCooldown = 0.95;
+        this.vy = 13.5 + Math.min(3.2, this.currentSpeed * 0.22);
         if (this.anim) {
           if (this.anim.getAction('Jump')) this.anim.playOnce('Jump', 'Walk');
           else if (this.anim.getAction('Run')) this.anim.play('Run');
@@ -499,8 +533,10 @@ class Character3DBase {
               this.state = 'FREEFALL';
               this.onStartFreefall();
             }
-            // Transition directly to next subterranean depth!
-            if (!sceneManager3D.isCollapsing) {
+            // Visibly plunge through the floor fissure before full chamber collapse!
+            if (typeof sceneManager3D.triggerCrackPlunge === 'function') {
+              sceneManager3D.triggerCrackPlunge(physics3D);
+            } else if (!sceneManager3D.isCollapsing) {
               sceneManager3D.triggerCollapse(physics3D);
             }
           }
@@ -509,7 +545,14 @@ class Character3DBase {
         // While standing/walking, if the slab beneath collapses:
         if (sceneManager3D.isSlabCollapsedAt(this.group.position.x)) {
           this.isGrounded = false;
-          this.vy = -6.0;
+          this.vy = -8.0;
+          if (this.state !== 'FREEFALL') {
+            this.state = 'FREEFALL';
+            this.onStartFreefall();
+          }
+          if (typeof sceneManager3D.triggerCrackPlunge === 'function') {
+            sceneManager3D.triggerCrackPlunge(physics3D);
+          }
         }
       }
     }
@@ -800,7 +843,6 @@ class Wizard3D extends Character3DBase {
         radius: 1.8
       });
 
-      sceneManager3D.damageFloorAt(meteorX, 10, 65, physics3D);
       this.attackCooldown = 1.1;
       if (Math.random() < 0.4) this.say(this.quips[Math.floor(Math.random() * this.quips.length)]);
     } else {
@@ -1009,9 +1051,6 @@ class Soldier3D extends Character3DBase {
       physics3D.spawnSparks3D(barrelWorld.x, barrelWorld.y, barrelWorld.z, 3, 0xf59e0b);
 
       this.attackCooldown = 0.11;
-      if (Math.random() < 0.25) {
-        sceneManager3D.damageFloorAt(mouse3D.worldX, 3.5, 15, physics3D);
-      }
     } else if (roll < 0.85) {
       this.recoil = 0.6;
       if (window.soundEngine) window.soundEngine.playJavelinThrow();
@@ -1049,7 +1088,6 @@ class Soldier3D extends Character3DBase {
         life: 3.5
       });
 
-      sceneManager3D.damageFloorAt(mouse3D.worldX, 9, 75, physics3D);
       this.say("EAT BAZOOKA!");
       this.attackCooldown = 1.3;
     }

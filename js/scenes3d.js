@@ -175,9 +175,12 @@ class FloorSlab3D {
     }
 
     this.mesh = new THREE.Mesh(geom, mat);
-    this.mesh.position.set(x, y - h / 2, z);
+    this.baseY = y - h / 2;
+    this.mesh.position.set(x, this.baseY, z);
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = true;
+    this.damageTiltZ = (Math.random() - 0.5) * 0.14;
+    this.damageTiltX = (Math.random() - 0.5) * 0.10;
     this.scene.add(this.mesh);
   }
 
@@ -185,14 +188,30 @@ class FloorSlab3D {
     if (this.collapsed) return;
     this.hp -= amount;
 
+    const dmgRatio = Math.max(0, Math.min(1, 1 - this.hp / this.maxHp));
+
+    if (this.mesh) {
+      // Progressive structural sinking & tilting as slab weakens
+      this.mesh.position.y = this.baseY - dmgRatio * 0.55;
+      this.mesh.rotation.z = this.damageTiltZ * dmgRatio;
+      this.mesh.rotation.x = this.damageTiltX * dmgRatio;
+    }
+
     if (this.mesh && this.mesh.material) {
       this.mesh.material.emissive.setHex(0xffaa44);
+      this.mesh.material.emissiveIntensity = 0.85;
       setTimeout(() => {
-        if (this.mesh && this.mesh.material) {
-          const resetEmissive = this.theme === 'foundry' ? 0xea580c : 0x000000;
-          this.mesh.material.emissive.setHex(resetEmissive);
+        if (this.mesh && this.mesh.material && !this.collapsed) {
+          if (dmgRatio > 0.45) {
+            this.mesh.material.emissive.setHex(0xdc2626);
+            this.mesh.material.emissiveIntensity = dmgRatio * 0.5;
+          } else {
+            const resetEmissive = this.theme === 'foundry' ? 0xea580c : 0x000000;
+            this.mesh.material.emissive.setHex(resetEmissive);
+            this.mesh.material.emissiveIntensity = this.theme === 'foundry' ? 0.35 : 0.0;
+          }
         }
-      }, 70);
+      }, 80);
     }
 
     if (this.hp <= 0) {
@@ -1020,6 +1039,7 @@ class SceneManager3D {
     this.currentSceneId = sceneId;
     this.isCollapsing = false;
     this.collapseTriggered = false;
+    this.crackPlungeTimer = 0;
     this.freefallProgress = 0;
     this.freefallTimer = 0;
     this.freefallSpeed = 0;
@@ -1115,10 +1135,18 @@ class SceneManager3D {
     }
   }
 
+  triggerCrackPlunge(physics3D) {
+    if (this.isCollapsing || this.collapseTriggered || this.crackPlungeTimer > 0) return;
+    this.crackPlungeTimer = 0.45;
+    if (physics3D) physics3D.addTrauma(0.45);
+    if (window.soundEngine) window.soundEngine.playStoneCrush(1.1);
+  }
+
   triggerCollapse(physics3D) {
     if (this.isCollapsing || this.collapseTriggered) return;
     this.isCollapsing = true;
     this.collapseTriggered = true;
+    this.crackPlungeTimer = 0;
     this.freefallTimer = 0;
     this.freefallProgress = 0;
     this.shaftGroup.visible = true;
@@ -1191,6 +1219,13 @@ class SceneManager3D {
 
   update(dt, physics3D) {
     for (const slab of this.floorSlabs) slab.update(dt);
+
+    if (this.crackPlungeTimer > 0) {
+      this.crackPlungeTimer -= dt;
+      if (this.crackPlungeTimer <= 0) {
+        this.triggerCollapse(physics3D);
+      }
+    }
 
     const destructionPct = this.getDestructionPercentage();
     const collapsedCount = this.floorSlabs.filter(s => s.collapsed).length;

@@ -37,12 +37,14 @@ class GameApp3D {
     this.physics3D = new PhysicsWorld3D(this.scene, this.camera);
     this.sceneManager3D = new SceneManager3D(this.scene, this.camera);
 
-    // Mouse Tracking in 3D Space
+    // Mouse Tracking & Active Cursor Warfare State in 3D Space
     this.mouse3D = {
       worldX: 0,
       worldY: 6,
       worldZ: 0,
       active: true,
+      isHoldingVortex: false,
+      vortexHoldTimer: 0,
       lastExitPos: null,
       lastExitWorldX: 0,
       shieldRipple: 0,
@@ -174,6 +176,36 @@ class GameApp3D {
       this.updateStatusHUD();
     });
 
+    window.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target && e.target.closest && e.target.closest('.workbench-toolbar')) return;
+      window.soundEngine.ensureContext();
+
+      this.physics3D.triggerCursorRepulsor(
+        this.mouse3D,
+        this.sceneManager3D,
+        this.getActiveCharacters()
+      );
+      this.mouse3D.isHoldingVortex = true;
+      this.mouse3D.vortexHoldTimer = 0;
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      if (e.button !== 0) return;
+      if (this.mouse3D.isHoldingVortex) {
+        this.mouse3D.isHoldingVortex = false;
+        this.physics3D.updateCursorVortex(0, this.mouse3D, false);
+        if (this.mouse3D.vortexHoldTimer > 0.20) {
+          this.physics3D.releaseCursorVortex(
+            this.mouse3D,
+            this.sceneManager3D,
+            this.getActiveCharacters()
+          );
+        }
+        this.mouse3D.vortexHoldTimer = 0;
+      }
+    });
+
     window.addEventListener('keydown', (e) => {
       if (e.key === '1') this.setCharacter('wizard');
       else if (e.key === '2') this.setCharacter('soldier');
@@ -181,7 +213,37 @@ class GameApp3D {
       else if (e.key === '4') this.setCharacter('robot');
       else if (e.key.toLowerCase() === 'r') this.sceneManager3D.loadScene(this.sceneManager3D.currentSceneId);
       else if (e.key.toLowerCase() === 'm') this.toggleMute();
+      else if (e.code === 'Space' && !e.repeat) {
+        window.soundEngine.ensureContext();
+        this.physics3D.triggerCursorRepulsor(
+          this.mouse3D,
+          this.sceneManager3D,
+          this.getActiveCharacters()
+        );
+        this.mouse3D.isHoldingVortex = true;
+        this.mouse3D.vortexHoldTimer = 0;
+      }
     });
+
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'Space' && this.mouse3D.isHoldingVortex) {
+        this.mouse3D.isHoldingVortex = false;
+        this.physics3D.updateCursorVortex(0, this.mouse3D, false);
+        if (this.mouse3D.vortexHoldTimer > 0.20) {
+          this.physics3D.releaseCursorVortex(
+            this.mouse3D,
+            this.sceneManager3D,
+            this.getActiveCharacters()
+          );
+        }
+        this.mouse3D.vortexHoldTimer = 0;
+      }
+    });
+  }
+
+  getActiveCharacters() {
+    if (this.multiSquadMode) return this.squad;
+    return this.character ? [this.character] : [];
   }
 
   setCharacter(type) {
@@ -379,18 +441,43 @@ class GameApp3D {
       this.character.update(dt, this.mouse3D, this.physics3D, this.sceneManager3D);
     }
 
-    // 3. UPDATE 3D PHYSICS (auto-fading debris & projectiles)
-    this.physics3D.update(dt, this.mouse3D, this.sceneManager3D.props, this.sceneManager3D.floorY);
+    // 3. UPDATE 3D PHYSICS & ACTIVE CURSOR VORTEX
+    const activeChars = this.getActiveCharacters();
+    if (this.mouse3D.isHoldingVortex) {
+      this.mouse3D.vortexHoldTimer += dt;
+      if (this.mouse3D.vortexHoldTimer > 0.16) {
+        this.physics3D.updateCursorVortex(dt, this.mouse3D, true);
+      }
+    }
+    this.physics3D.update(
+      dt,
+      this.mouse3D,
+      this.sceneManager3D.props,
+      this.sceneManager3D.floorY,
+      this.sceneManager3D,
+      activeChars
+    );
 
     // 4. UPDATE MOUSE 3D SHIELD
     if (this.shieldMesh) {
       this.shieldMesh.position.set(this.mouse3D.worldX, this.mouse3D.worldY, this.mouse3D.worldZ);
-      this.shieldMesh.rotation.z += 1.5 * dt;
+      const isVortexActive = this.mouse3D.isHoldingVortex && this.mouse3D.vortexHoldTimer > 0.16;
+      this.shieldMesh.rotation.z += (isVortexActive ? 8.5 : 1.5) * dt;
+
+      if (this.shieldMesh.material) {
+        this.shieldMesh.material.color.setHex(isVortexActive ? 0xc084fc : 0x38bdf8);
+        this.shieldMesh.material.emissive.setHex(isVortexActive ? 0x9333ea : 0x0284c7);
+      }
 
       if (this.mouse3D.shieldRipple > 0) {
         this.mouse3D.shieldRipple = Math.max(0, this.mouse3D.shieldRipple - 3.5 * dt);
         const s = 1.0 + this.mouse3D.shieldRipple * 0.4;
         this.shieldMesh.scale.set(s, s, s);
+      } else if (isVortexActive) {
+        const pulse = 1.15 + Math.sin(currentTime * 0.018) * 0.12;
+        this.shieldMesh.scale.set(pulse, pulse, pulse);
+      } else {
+        this.shieldMesh.scale.set(1.0, 1.0, 1.0);
       }
     }
 
@@ -409,9 +496,11 @@ class GameApp3D {
     const fill = document.getElementById('destructionFill');
     const text = document.getElementById('destructionText');
     const defl = document.getElementById('deflectionsCount');
+    const parriesEl = document.getElementById('parriesCount');
     if (fill) fill.style.width = `${destructionPct}%`;
     if (text) text.textContent = `${destructionPct}%`;
     if (defl) defl.textContent = this.physics3D.stats.deflections;
+    if (parriesEl) parriesEl.textContent = this.physics3D.stats.parries || 0;
 
     requestAnimationFrame((t) => this.loop(t));
   }
