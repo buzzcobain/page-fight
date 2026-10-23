@@ -218,6 +218,13 @@ class Character3DBase {
     this.attackCooldown = 0;
     this.rage = 0;
     this.staggerTimer = 0;
+    this.grappleCooldown = 1.2;
+    this.grappleTimer = 0;
+    this.grappleShakeProgress = 0;
+    this.grappleBeatTimer = 0;
+    this.grappleSwingAngle = 0;
+    this.grappleSwingVel = 0;
+    this.isPouncingAtCursor = false;
     this.speechText = '';
     this.speechTimer = 0;
 
@@ -296,10 +303,19 @@ class Character3DBase {
 
   applyKnockback(kx, ky, label = '') {
     if (this.state === 'FREEFALL') return;
+    if (this.state === 'GRAPPLING') {
+      // Repulsor blast or heavy hit while latched adds massive shake-off impulse
+      this.grappleShakeProgress += 60;
+      if (this.grappleShakeProgress < 100) return;
+      this.state = 'ATTACKING';
+      this.grappleCooldown = 3.2;
+      this.group.rotation.z = 0;
+    }
     this.vx = kx;
     this.vy = Math.max(this.vy, ky);
     this.isGrounded = false;
     this.isJumping = false;
+    this.isPouncingAtCursor = false;
     this.staggerTimer = 0.38;
     this.rage = Math.min(2.5, this.rage + 0.35);
 
@@ -313,6 +329,156 @@ class Character3DBase {
 
     if (label && Math.random() < 0.75) {
       this.say(`${label}?! UNFORGIVABLE!`, 2.0);
+    }
+  }
+
+  startGrapple(mouse3D, physics3D) {
+    this.state = 'GRAPPLING';
+    this.isGrounded = false;
+    this.isJumping = false;
+    this.isPouncingAtCursor = false;
+    this.grappleTimer = 0;
+    this.grappleShakeProgress = 0;
+    this.grappleBeatTimer = 0.35;
+    this.grappleSwingAngle = Math.max(-0.6, Math.min(0.6, -this.vx * 0.02));
+    this.grappleSwingVel = 0;
+    this.vx = 0;
+    this.vy = 0;
+
+    if (this.anim) {
+      if (this.anim.getAction('Punch')) this.anim.play('Punch', 0.15);
+      else if (this.anim.getAction('Sword_Attack')) this.anim.play('Sword_Attack', 0.15);
+      else if (this.anim.getAction('Staff_Attack')) this.anim.play('Staff_Attack', 0.15);
+      else if (this.anim.getAction('Jump')) this.anim.play('Jump', 0.15, THREE.LoopOnce);
+    }
+
+    if (window.soundEngine && typeof window.soundEngine.playGrappleLatch === 'function') {
+      window.soundEngine.playGrappleLatch();
+    }
+    if (physics3D) {
+      physics3D.spawnSparks3D(mouse3D.worldX, mouse3D.worldY, mouse3D.worldZ, 22, 0xf97316);
+      physics3D.addTrauma(0.32);
+    }
+    if (mouse3D && typeof mouse3D.triggerDeflection === 'function') {
+      mouse3D.triggerDeflection();
+    }
+
+    const latchQuips = {
+      Wizard: "I HAVE BOUND THEE! THOU SHALT NOT ESCAPE MY GRASP!",
+      Soldier: "TARGET PINNED! HOLD ON AND BREACH THE SHIELD!",
+      Knight: "I HAVE SEIZED THE DEMON! WRESTLE IT TO THE EARTH!",
+      Robot: "MAGNETIC GRAPPLE LOCKED! CRUSHING CURSOR CORE!"
+    };
+    this.say(latchQuips[this.name] || "GOT YOU! TRY SHAKING ME OFF NOW!", 2.8);
+
+    if (window.app3D && typeof window.app3D.updateStatusHUD === 'function') {
+      window.app3D.updateStatusHUD();
+    }
+  }
+
+  throwOffGrapple(mouse3D, physics3D) {
+    this.state = 'ATTACKING';
+    this.grappleCooldown = 3.6;
+    this.group.rotation.z = 0;
+
+    const cVx = (mouse3D && mouse3D.vx) ? mouse3D.vx : 0;
+    const cVy = (mouse3D && mouse3D.vy) ? mouse3D.vy : 0;
+    const fallbackSign = (Math.random() > 0.5 ? 1 : -1);
+    let flingVx = cVx * 0.58 + Math.sin(this.grappleSwingAngle) * 18;
+    if (Math.abs(flingVx) < 16) flingVx = (Math.sign(flingVx) || fallbackSign) * 24;
+    flingVx = Math.max(-46, Math.min(46, flingVx));
+
+    const flingVy = Math.max(12, Math.min(32, cVy * 0.42 + 16));
+
+    if (window.soundEngine && typeof window.soundEngine.playShakeFling === 'function') {
+      window.soundEngine.playShakeFling();
+    }
+    if (physics3D) {
+      physics3D.spawnSparks3D(mouse3D.worldX, mouse3D.worldY, mouse3D.worldZ, 28, 0x38bdf8);
+      physics3D.addTrauma(0.38);
+      physics3D.stats.parries = (physics3D.stats.parries || 0) + 1;
+    }
+
+    const flingQuips = {
+      Wizard: "CURSE THY CENTRIFUGAL SORCERY—AAAARGH!",
+      Soldier: "LOSING GRIP—G-FORCE TOO HIGH!",
+      Knight: "BY THE GODS, IT FLUNG ME ASIDE!",
+      Robot: "CLAMP SHEAR DETECTED! TRAJECTORY UNCONTROLLED!"
+    };
+    this.applyKnockback(flingVx, flingVy, '');
+    this.say(flingQuips[this.name] || "AAAARGH! SHAKEN OFF!", 2.4);
+
+    if (window.app3D && typeof window.app3D.updateStatusHUD === 'function') {
+      window.app3D.updateStatusHUD();
+    }
+  }
+
+  updateGrappleState(dt, mouse3D, physics3D, sceneManager3D) {
+    if (!mouse3D.active || (sceneManager3D && sceneManager3D.isCollapsing)) {
+      this.state = 'ATTACKING';
+      this.grappleCooldown = 2.0;
+      this.group.rotation.z = 0;
+      return;
+    }
+
+    this.grappleTimer += dt;
+    this.grappleBeatTimer -= dt;
+
+    // 1. Pendulum Swing Dynamics under Cursor Acceleration
+    const cVx = mouse3D.vx || 0;
+    const cVy = mouse3D.vy || 0;
+    const cSpeed = Math.hypot(cVx, cVy);
+
+    this.grappleSwingVel += (-cVx * 0.048 - 20.0 * Math.sin(this.grappleSwingAngle)) * dt;
+    this.grappleSwingVel *= Math.max(0, 1.0 - 3.2 * dt);
+    this.grappleSwingAngle = Math.max(-1.25, Math.min(1.25, this.grappleSwingAngle + this.grappleSwingVel * dt));
+
+    const hangLength = 4.7;
+    const hangX = mouse3D.worldX + Math.sin(this.grappleSwingAngle) * hangLength + (this.squadOffsetX || 0) * 0.06;
+    const hangY = Math.max(0.15, mouse3D.worldY - Math.cos(this.grappleSwingAngle) * hangLength);
+    const hangZ = (mouse3D.worldZ || 0) + 0.65;
+
+    this.group.position.set(hangX, hangY, hangZ);
+    this.group.rotation.z = this.grappleSwingAngle * 0.85;
+    this.group.rotation.y = this.grappleSwingAngle * 0.35;
+
+    // 2. Point-Blank Shield Bashing while Clinging
+    if (this.grappleBeatTimer <= 0) {
+      this.grappleBeatTimer = 0.52;
+      if (this.anim) {
+        if (this.anim.getAction('Punch')) this.anim.playOnce('Punch', 'Idle', 0.1);
+        else if (this.anim.getAction('Sword_Attack')) this.anim.playOnce('Sword_Attack', 'Idle', 0.1);
+        else if (this.anim.getAction('Staff_Attack')) this.anim.playOnce('Staff_Attack', 'Idle', 0.1);
+      }
+      if (window.soundEngine) window.soundEngine.playArmorClang();
+      if (physics3D) {
+        physics3D.spawnSparks3D(mouse3D.worldX, mouse3D.worldY, mouse3D.worldZ, 12, 0xf97316);
+        physics3D.addTrauma(0.16);
+        physics3D.stats.deflections++;
+      }
+      if (typeof mouse3D.triggerDeflection === 'function') {
+        mouse3D.triggerDeflection();
+      }
+    }
+
+    // 3. Accumulate Shake-Off Progress from Rapid Cursor Jiggling / Direction Reversals
+    if (cSpeed > 32) {
+      this.grappleShakeProgress += (cSpeed - 24) * 1.45 * dt;
+      if (Math.random() < 0.45 && physics3D) {
+        physics3D.spawnSparks3D(mouse3D.worldX, mouse3D.worldY, mouse3D.worldZ, 3, 0x38bdf8);
+      }
+    }
+    if (mouse3D.shakeImpulse && mouse3D.shakeImpulse > 0) {
+      this.grappleShakeProgress += mouse3D.shakeImpulse * 28.0;
+    }
+
+    // Slight natural decay if player stops shaking completely, but release after max 5.2s
+    if (cSpeed < 15) {
+      this.grappleShakeProgress = Math.max(0, this.grappleShakeProgress - 12.0 * dt);
+    }
+
+    if (this.grappleShakeProgress >= 100 || this.grappleTimer >= 5.2) {
+      this.throwOffGrapple(mouse3D, physics3D);
     }
   }
 
@@ -388,7 +554,7 @@ class Character3DBase {
   }
 
   resolveEnvironmentCollisions(dt, sceneManager3D, physics3D) {
-    if (!sceneManager3D || sceneManager3D.isCollapsing || this.state === 'FREEFALL') return;
+    if (!sceneManager3D || sceneManager3D.isCollapsing || this.state === 'FREEFALL' || this.state === 'GRAPPLING') return;
 
     const r = this.collisionRadius || 1.8;
     let px = this.group.position.x;
@@ -463,6 +629,7 @@ class Character3DBase {
   updateLocomotion(dt, targetX, mouse3D, sceneManager3D, physics3D) {
     if (this.jumpCooldown > 0) this.jumpCooldown -= dt;
     if (this.staggerTimer > 0) this.staggerTimer -= dt;
+    if (this.grappleCooldown > 0) this.grappleCooldown -= dt;
     if (this.rage > 0) this.rage = Math.max(0, this.rage - dt * 0.08);
 
     const rageMult = 1.0 + this.rage * 0.16;
@@ -471,7 +638,7 @@ class Character3DBase {
     const dist = targetX - this.group.position.x;
     const absDist = Math.abs(dist);
 
-    if (this.staggerTimer <= 0) {
+    if (this.staggerTimer <= 0 && !this.isPouncingAtCursor) {
       if (absDist > 2.2) {
         const desiredSpeed = (absDist > 11.0 ? this.runSpeed : this.walkSpeed) * rageMult;
         this.targetVx = Math.sign(dist) * desiredSpeed;
@@ -481,7 +648,7 @@ class Character3DBase {
 
       const accel = (Math.abs(this.targetVx) > Math.abs(this.vx)) ? 24.0 : 32.0;
       this.vx += (this.targetVx - this.vx) * Math.min(1.0, accel * dt);
-    } else {
+    } else if (this.staggerTimer > 0) {
       // Air/knockback drag while staggered
       this.vx *= Math.max(0, 1.0 - 2.5 * dt);
     }
@@ -489,17 +656,50 @@ class Character3DBase {
     this.currentSpeed = Math.abs(this.vx);
     this.group.position.x += this.vx * dt;
 
-    // 2. Crack / Void Lookahead & Calibrated Leaping
+    // 2. Crack / Void Lookahead, Cursor Pounce & Calibrated Leaping
     if (sceneManager3D && sceneManager3D.floorSlabs) {
       const standingOnVoid = sceneManager3D.isSlabCollapsedAt(this.group.position.x);
       const lookDist = Math.max(1.8, Math.min(3.4, this.currentSpeed * 0.2));
       const aheadX = this.group.position.x + Math.sign(this.vx || this.facing) * lookDist;
       const crackAhead = !standingOnVoid && sceneManager3D.isSlabCollapsedAt(aheadX);
 
-      // Launch calibrated athletic jump over a 1-slab crack when moving forward from solid ground
-      if (crackAhead && this.isGrounded && this.staggerTimer <= 0 && this.jumpCooldown <= 0 && this.currentSpeed > 3.2) {
+      // 2A. Ballistic Pounce to Grab the Cursor when within range!
+      const cursorDx = (mouse3D.worldX || 0) - this.group.position.x;
+      const cursorDy = (mouse3D.worldY || 6) - (this.group.position.y + 4.5);
+      const canPounceAtCursor = (
+        !standingOnVoid &&
+        mouse3D.active &&
+        this.isGrounded &&
+        this.staggerTimer <= 0 &&
+        this.jumpCooldown <= 0 &&
+        this.grappleCooldown <= 0 &&
+        Math.abs(cursorDx) < 17.5 &&
+        mouse3D.worldY >= 2.2 &&
+        mouse3D.worldY <= 23.0
+      );
+
+      if (canPounceAtCursor && (Math.abs(cursorDx) < 7.5 || Math.random() < 1.35 * dt)) {
+        const tFlight = Math.max(0.32, Math.min(0.68, Math.hypot(cursorDx, cursorDy) / 28.0));
         this.isGrounded = false;
         this.isJumping = true;
+        this.isPouncingAtCursor = true;
+        this.jumpCooldown = 1.35;
+        this.grappleCooldown = 3.2;
+        this.vx = Math.max(-27.0, Math.min(27.0, cursorDx / tFlight));
+        this.vy = Math.max(15.5, Math.min(28.5, (cursorDy + 0.5 * 46.0 * tFlight * tFlight) / tFlight));
+
+        if (this.anim) {
+          if (this.anim.getAction('Jump')) this.anim.playOnce('Jump', 'Walk');
+          else if (this.anim.getAction('Run')) this.anim.play('Run');
+        }
+        if (window.soundEngine && typeof window.soundEngine.playJavelinThrow === 'function') {
+          window.soundEngine.playJavelinThrow();
+        }
+      } else if (crackAhead && this.isGrounded && this.staggerTimer <= 0 && this.jumpCooldown <= 0 && this.currentSpeed > 3.2) {
+        // 2B. Launch calibrated athletic jump over a 1-slab crack when moving forward from solid ground
+        this.isGrounded = false;
+        this.isJumping = true;
+        this.isPouncingAtCursor = false;
         this.jumpCooldown = 0.95;
         this.vy = 13.5 + Math.min(3.2, this.currentSpeed * 0.22);
         if (this.anim) {
@@ -511,10 +711,21 @@ class Character3DBase {
         }
       }
 
-      // Vertical Trajectory, Landing & Crack Plunging
+      // Vertical Trajectory, Mid-Air Cursor Latch, Landing & Crack Plunging
       if (!this.isGrounded) {
         this.vy -= 46.0 * dt;
         this.group.position.y += this.vy * dt;
+
+        // Check if character's hands/chest reach the cursor in mid-air to LATCH ON!
+        if (mouse3D.active && this.staggerTimer <= 0 && this.grappleCooldown <= 3.05) {
+          const grabDx = this.group.position.x - mouse3D.worldX;
+          const grabDy = (this.group.position.y + 4.7) - mouse3D.worldY;
+          const grabDist = Math.hypot(grabDx, grabDy);
+          if (grabDist < 4.3) {
+            this.startGrapple(mouse3D, physics3D);
+            return;
+          }
+        }
 
         if (this.group.position.y <= 0) {
           const isFloorMissingHere = sceneManager3D.isSlabCollapsedAt(this.group.position.x);
@@ -525,10 +736,12 @@ class Character3DBase {
             this.vy = 0;
             this.isGrounded = true;
             this.isJumping = false;
+            this.isPouncingAtCursor = false;
             if (physics3D) physics3D.spawnSparks3D(this.group.position.x, 0, this.group.position.z, 10, 0x94a3b8);
           } else {
             // FELL INTO THE CRACK IN THE GROUND!
             this.isGrounded = false;
+            this.isPouncingAtCursor = false;
             if (this.state !== 'FREEFALL') {
               this.state = 'FREEFALL';
               this.onStartFreefall();
@@ -597,7 +810,7 @@ class Character3DBase {
   }
 
   postUpdatePhysics(dt, sceneManager3D, physics3D) {
-    if (this.state !== 'FREEFALL') {
+    if (this.state !== 'FREEFALL' && this.state !== 'GRAPPLING') {
       const desiredZ = this.computeNavigationTargetZ(this.targetX, sceneManager3D);
       this.group.position.z += (desiredZ - this.group.position.z) * 4.5 * dt;
     }
@@ -618,6 +831,7 @@ class Character3DBase {
     if (sceneManager3D.isCollapsing || this.state === 'FREEFALL') {
       if (this.state !== 'FREEFALL') {
         this.state = 'FREEFALL';
+        this.group.rotation.z = 0;
         this.onStartFreefall();
       }
 
@@ -631,6 +845,9 @@ class Character3DBase {
         this.attackCooldown = 0.85;
         this.fireUpwardAtCursor(mouse3D, physics3D);
       }
+      return;
+    } else if (this.state === 'GRAPPLING') {
+      this.updateGrappleState(dt, mouse3D, physics3D, sceneManager3D);
       return;
     } else if (this.state === 'LANDING') {
       this.landingTimer -= dt;
@@ -764,7 +981,7 @@ class Wizard3D extends Character3DBase {
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
     this.updateCommon(dt, mouse3D, physics3D, sceneManager3D);
-    if (this.state === 'FREEFALL' || this.state === 'LANDING') {
+    if (this.state === 'FREEFALL' || this.state === 'LANDING' || this.state === 'GRAPPLING') {
       this.postUpdatePhysics(dt, sceneManager3D, physics3D);
       return;
     }
@@ -967,7 +1184,7 @@ class Soldier3D extends Character3DBase {
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
     this.updateCommon(dt, mouse3D, physics3D, sceneManager3D);
-    if (this.state === 'FREEFALL' || this.state === 'LANDING') {
+    if (this.state === 'FREEFALL' || this.state === 'LANDING' || this.state === 'GRAPPLING') {
       this.postUpdatePhysics(dt, sceneManager3D, physics3D);
       return;
     }
@@ -1169,7 +1386,7 @@ class Knight3D extends Character3DBase {
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
     this.updateCommon(dt, mouse3D, physics3D, sceneManager3D);
-    if (this.state === 'FREEFALL' || this.state === 'LANDING') {
+    if (this.state === 'FREEFALL' || this.state === 'LANDING' || this.state === 'GRAPPLING') {
       this.postUpdatePhysics(dt, sceneManager3D, physics3D);
       return;
     }
@@ -1325,7 +1542,7 @@ class Robot3D extends Character3DBase {
 
   update(dt, mouse3D, physics3D, sceneManager3D) {
     this.updateCommon(dt, mouse3D, physics3D, sceneManager3D);
-    if (this.state === 'FREEFALL' || this.state === 'LANDING') {
+    if (this.state === 'FREEFALL' || this.state === 'LANDING' || this.state === 'GRAPPLING') {
       this.postUpdatePhysics(dt, sceneManager3D, physics3D);
       return;
     }

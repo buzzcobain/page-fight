@@ -42,6 +42,15 @@ class GameApp3D {
       worldX: 0,
       worldY: 6,
       worldZ: 0,
+      rawWorldX: 0,
+      rawWorldY: 6,
+      prevWorldX: 0,
+      prevWorldY: 6,
+      vx: 0,
+      vy: 0,
+      lastSignX: 0,
+      lastSignY: 0,
+      shakeImpulse: 0,
       active: true,
       isHoldingVortex: false,
       vortexHoldTimer: 0,
@@ -152,6 +161,8 @@ class GameApp3D {
       this.raycaster.ray.intersectPlane(this.planeZ, hit);
 
       if (hit) {
+        this.mouse3D.rawWorldX = hit.x;
+        this.mouse3D.rawWorldY = hit.y;
         this.mouse3D.worldX = hit.x;
         this.mouse3D.worldY = hit.y;
         this.mouse3D.worldZ = hit.z;
@@ -363,7 +374,11 @@ class GameApp3D {
   updateStatusHUD() {
     const statusEl = document.getElementById('activeTargetStatus');
     if (!statusEl) return;
-    if (this.mouse3D.active) {
+    const isAnyGrappling = this.getActiveCharacters().some((c) => c && c.state === 'GRAPPLING');
+    if (isAnyGrappling) {
+      statusEl.textContent = 'GRAPPLED // SHAKE CURSOR!';
+      statusEl.className = 'status-tag hunting';
+    } else if (this.mouse3D.active) {
       statusEl.textContent = 'TARGET LOCKED';
       statusEl.className = 'status-tag locked';
     } else {
@@ -433,6 +448,35 @@ class GameApp3D {
       }
     }
 
+    // 1.5 COMPUTE CURSOR KINEMATICS & SHAKE-OFF IMPULSES
+    const safeDt = Math.max(0.004, dt);
+    const activeChars = this.getActiveCharacters();
+    const grapplingCount = activeChars.filter((c) => c && c.state === 'GRAPPLING').length;
+
+    // Apply physical weight sag when characters are hanging from the cursor
+    const weightSagY = grapplingCount * 1.45;
+    this.mouse3D.worldX = this.mouse3D.rawWorldX;
+    this.mouse3D.worldY = Math.max(1.2, this.mouse3D.rawWorldY - weightSagY);
+
+    const rawVx = (this.mouse3D.rawWorldX - this.mouse3D.prevWorldX) / safeDt;
+    const rawVy = (this.mouse3D.rawWorldY - this.mouse3D.prevWorldY) / safeDt;
+    this.mouse3D.vx = this.mouse3D.vx * 0.45 + rawVx * 0.55;
+    this.mouse3D.vy = this.mouse3D.vy * 0.45 + rawVy * 0.55;
+    this.mouse3D.prevWorldX = this.mouse3D.rawWorldX;
+    this.mouse3D.prevWorldY = this.mouse3D.rawWorldY;
+
+    this.mouse3D.shakeImpulse = 0;
+    const signX = Math.abs(this.mouse3D.vx) > 22 ? Math.sign(this.mouse3D.vx) : 0;
+    const signY = Math.abs(this.mouse3D.vy) > 22 ? Math.sign(this.mouse3D.vy) : 0;
+    if (signX !== 0 && this.mouse3D.lastSignX !== 0 && signX !== this.mouse3D.lastSignX) {
+      this.mouse3D.shakeImpulse += 1.0;
+    }
+    if (signY !== 0 && this.mouse3D.lastSignY !== 0 && signY !== this.mouse3D.lastSignY) {
+      this.mouse3D.shakeImpulse += 0.85;
+    }
+    if (signX !== 0) this.mouse3D.lastSignX = signX;
+    if (signY !== 0) this.mouse3D.lastSignY = signY;
+
     // 2. UPDATE CHARACTERS
     if (this.multiSquadMode) {
       for (const c of this.squad) c.update(dt, this.mouse3D, this.physics3D, this.sceneManager3D);
@@ -442,7 +486,6 @@ class GameApp3D {
     }
 
     // 3. UPDATE 3D PHYSICS & ACTIVE CURSOR VORTEX
-    const activeChars = this.getActiveCharacters();
     if (this.mouse3D.isHoldingVortex) {
       this.mouse3D.vortexHoldTimer += dt;
       if (this.mouse3D.vortexHoldTimer > 0.16) {
@@ -462,11 +505,14 @@ class GameApp3D {
     if (this.shieldMesh) {
       this.shieldMesh.position.set(this.mouse3D.worldX, this.mouse3D.worldY, this.mouse3D.worldZ);
       const isVortexActive = this.mouse3D.isHoldingVortex && this.mouse3D.vortexHoldTimer > 0.16;
-      this.shieldMesh.rotation.z += (isVortexActive ? 8.5 : 1.5) * dt;
+      const isGrappled = grapplingCount > 0;
+      this.shieldMesh.rotation.z += (isVortexActive ? 8.5 : (isGrappled ? 5.5 : 1.5)) * dt;
 
       if (this.shieldMesh.material) {
-        this.shieldMesh.material.color.setHex(isVortexActive ? 0xc084fc : 0x38bdf8);
-        this.shieldMesh.material.emissive.setHex(isVortexActive ? 0x9333ea : 0x0284c7);
+        const hexColor = isGrappled ? 0xf97316 : (isVortexActive ? 0xc084fc : 0x38bdf8);
+        const hexEmissive = isGrappled ? 0xea580c : (isVortexActive ? 0x9333ea : 0x0284c7);
+        this.shieldMesh.material.color.setHex(hexColor);
+        this.shieldMesh.material.emissive.setHex(hexEmissive);
       }
 
       if (this.mouse3D.shieldRipple > 0) {
